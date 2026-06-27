@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Cài Đặt Telethon – Forwarder{% endblock %}
+{% block page_title %}🔧 Cài Đặt Telethon{% endblock %}
+
+{% block content %}
+<div class="alert alert-warn">
+  <span>⚠️</span>
+  <div><strong>Lỗi:</strong> {{ telethon_error }}</div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h2 class="card-title">🚀 Hướng Dẫn Cài Đặt</h2></div>
+  <div class="guide-steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Lấy API credentials từ Telegram</strong>
+        <p>Truy cập <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a>
+        → tạo App → lấy <code>api_id</code> và <code>api_hash</code></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Điền vào file .env</strong>
+        <pre class="code-block">TELETHON_API_ID=12345678
+TELETHON_API_HASH=abcdef1234567890abcdef
+TELETHON_PHONE=+84901234567
+TELETHON_SESSION=session_main</pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Chạy lệnh xác thực một lần</strong>
+        <pre class="code-block">python3 forwarder/auth.py</pre>
+        <p>Nhập mã OTP Telegram gửi về. File <code>forwarder_state/session_main.session</code> sẽ được tạo.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Khởi động lại web server</strong>
+        <pre class="code-block">python3 run.py</pre>
+        <p>Web app sẽ tự nhận session file, không cần xác thực lại.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card info-card">
+  <div class="info-icon">🔒</div>
+  <div>
+    <strong>An toàn:</strong> API credentials và session file chỉ được lưu trên server của bạn.
+    Không có dữ liệu nào được gửi đến bên thứ ba.
+    Session file hoạt động như cookie đăng nhập — giữ nó bí mật.
+  </div>
+</div>
+{% endblock %}

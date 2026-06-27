@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Đăng nhập Telethon – Forum Bot{% endblock %}
+{% block page_title %}🔑 Đăng Nhập Telethon (Userbot){% endblock %}
+
+{% block content %}
+{% if ready %}
+<div class="alert alert-ok">
+  <span>✅</span>
+  <strong>Telethon đã đăng nhập.</strong> Bạn có thể đăng nhập lại nếu muốn đổi tài khoản.
+</div>
+{% endif %}
+
+<div class="card" style="max-width:480px;margin:0 auto">
+  <div class="card-header"><h2 class="card-title">📱 Đăng nhập bằng số điện thoại</h2></div>
+  <div class="form-grid" style="grid-template-columns:1fr">
+
+    <!-- Bước 1: phone -->
+    <div id="step-phone">
+      <div class="form-group">
+        <label>Số điện thoại (kèm mã quốc gia)</label>
+        <input type="text" id="phone" class="form-control" placeholder="+84901234567" />
+      </div>
+      <button class="btn btn-primary" onclick="startLogin()" style="margin-top:10px">
+        📨 Gửi mã xác thực
+      </button>
+    </div>
+
+    <!-- Bước 2: code -->
+    <div id="step-code" class="hidden">
+      <div class="form-group">
+        <label>Mã OTP (Telegram gửi về app)</label>
+        <input type="text" id="code" class="form-control" placeholder="12345" inputmode="numeric" />
+        <small>Mã gửi vào Telegram app của số đó, không phải SMS.</small>
+      </div>
+      <button class="btn btn-primary" onclick="submitCode()" style="margin-top:10px">
+        ✅ Xác nhận mã
+      </button>
+    </div>
+
+    <!-- Bước 3: 2FA password -->
+    <div id="step-pw" class="hidden">
+      <div class="form-group">
+        <label>Mật khẩu 2FA (xác thực 2 bước)</label>
+        <input type="password" id="password" class="form-control" placeholder="••••••" />
+      </div>
+      <button class="btn btn-primary" onclick="submitPassword()" style="margin-top:10px">
+        🔓 Đăng nhập
+      </button>
+    </div>
+
+    <div id="login-msg" style="margin-top:14px"></div>
+  </div>
+</div>
+
+<div class="card info-card" style="max-width:480px;margin:16px auto 0">
+  <div class="info-icon">💡</div>
+  <div>
+    Lấy <code>API_ID</code> / <code>API_HASH</code> tại
+    <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a>,
+    điền trong <a href="{{ url_for('page_env') }}">Cấu hình .env</a> trước khi đăng nhập.
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function show(id){ document.getElementById(id).classList.remove('hidden'); }
+function hide(id){ document.getElementById(id).classList.add('hidden'); }
+function msg(html, ok){ 
+  document.getElementById('login-msg').innerHTML =
+    `<div class="alert ${ok?'alert-ok':'alert-warn'}"><span>${ok?'✅':'⚠️'}</span><div>${html}</div></div>`;
+}
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+                             body: JSON.stringify(body)});
+  return r.json();
+}
+
+async function startLogin(){
+  const phone = document.getElementById('phone').value.trim();
+  if(!phone){ msg('Nhập số điện thoại', false); return; }
+  msg('Đang gửi mã…', true);
+  const j = await post('/api/login/start', {phone});
+  if(!j.ok){ msg('Lỗi: '+j.error, false); return; }
+  if(j.already){ msg('Đã đăng nhập sẵn rồi!', true); return; }
+  hide('step-phone'); show('step-code');
+  msg('Mã đã gửi vào Telegram app. Nhập mã bên dưới.', true);
+}
+
+async function submitCode(){
+  const code = document.getElementById('code').value.trim();
+  if(!code){ msg('Nhập mã OTP', false); return; }
+  msg('Đang xác nhận…', true);
+  const j = await post('/api/login/code', {code});
+  if(!j.ok){ msg('Lỗi: '+j.error, false); return; }
+  if(j.need_password){ hide('step-code'); show('step-pw');
+    msg('Tài khoản có 2FA. Nhập mật khẩu.', true); return; }
+  if(j.done){ msg(`Đăng nhập thành công: ${j.name} (@${j.username||'N/A'})`, true);
+    hide('step-code'); setTimeout(()=>location.reload(), 2000); }
+}
+
+async function submitPassword(){
+  const password = document.getElementById('password').value;
+  if(!password){ msg('Nhập mật khẩu 2FA', false); return; }
+  msg('Đang đăng nhập…', true);
+  const j = await post('/api/login/password', {password});
+  if(!j.ok){ msg('Lỗi: '+j.error, false); return; }
+  if(j.done){ msg(`Đăng nhập thành công: ${j.name} (@${j.username||'N/A'})`, true);
+    hide('step-pw'); setTimeout(()=>location.reload(), 2000); }
+}
+</script>
+{% endblock %}

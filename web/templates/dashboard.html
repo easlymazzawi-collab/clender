@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Tổng Quan – Forum Bot Admin{% endblock %}
+{% block page_title %}📊 Tổng Quan{% endblock %}
+
+{% block content %}
+<!-- Stats cards -->
+<div class="stats-grid">
+  <div class="stat-card accent-blue">
+    <div class="stat-icon">🔗</div>
+    <div class="stat-body">
+      <div class="stat-number">{{ stats.total_links }}</div>
+      <div class="stat-label">Tổng Link Chia Sẻ</div>
+    </div>
+  </div>
+  <div class="stat-card accent-green">
+    <div class="stat-icon">👁️</div>
+    <div class="stat-body">
+      <div class="stat-number">{{ stats.total_views }}</div>
+      <div class="stat-label">Lượt Xem</div>
+    </div>
+  </div>
+  <div class="stat-card accent-purple">
+    <div class="stat-icon">📋</div>
+    <div class="stat-body">
+      <div class="stat-number">{{ stats.total_topics }}</div>
+      <div class="stat-label">Chủ Đề Đã Clone</div>
+    </div>
+  </div>
+  <div class="stat-card accent-orange">
+    <div class="stat-icon">↩️</div>
+    <div class="stat-body">
+      <div class="stat-number">{{ stats.total_forwards }}</div>
+      <div class="stat-label">Tổng Forward</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts row -->
+<div class="grid-2col">
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">📈 Hoạt Động Gần Đây</h2>
+      <button class="btn btn-sm" onclick="refreshStats()">🔄 Làm mới</button>
+    </div>
+    <canvas id="activityChart" height="180"></canvas>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">📁 Phân Loại Media</h2>
+    </div>
+    <canvas id="typeChart" height="180"></canvas>
+  </div>
+</div>
+
+<!-- Recent links -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">🔗 Link Mới Nhất</h2>
+    <a href="{{ url_for('page_links') }}" class="btn btn-sm">Xem tất cả →</a>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Token</th>
+          <th>Loại</th>
+          <th>Tên file</th>
+          <th>👁️ Lượt xem</th>
+          <th>Ngày tạo</th>
+          <th>Hành động</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in recent_links %}
+        <tr>
+          <td><code class="token">{{ l.token }}</code></td>
+          <td><span class="badge badge-{{ l.file_type }}">{{ l.file_type }}</span></td>
+          <td class="filename">{{ l.file_name or '–' }}</td>
+          <td>{{ l.access_count }}</td>
+          <td class="date">{{ l.created_at }}</td>
+          <td>
+            <a href="{{ base_url }}/media/{{ l.token }}" target="_blank" class="btn btn-xs">🔗</a>
+            <button class="btn btn-xs btn-danger" onclick="deleteLink('{{ l.token }}')">🗑️</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">Chưa có link nào</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Recent topics -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">📋 Chủ Đề Đã Clone</h2>
+    <a href="{{ url_for('page_topics') }}" class="btn btn-sm">Xem tất cả →</a>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Tên chủ đề</th>
+          <th>Forum nguồn</th>
+          <th>Forum đích</th>
+          <th>💬 Tin nhắn</th>
+          <th>Ngày clone</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in recent_topics %}
+        <tr>
+          <td>{{ t.topic_name or '–' }}</td>
+          <td><code>{{ t.source_chat_id }}</code></td>
+          <td><code>{{ t.dest_chat_id }}</code></td>
+          <td>{{ t.msg_count }}</td>
+          <td class="date">{{ t.cloned_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">Chưa có chủ đề nào</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Quick commands -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">⚡ Lệnh Bot Nhanh</h2>
+  </div>
+  <div class="command-grid">
+    <div class="cmd-item">
+      <code>/start</code>
+      <span>Khởi động bot</span>
+    </div>
+    <div class="cmd-item">
+      <code>/share</code>
+      <span>Tạo link chia sẻ (reply)</span>
+    </div>
+    <div class="cmd-item">
+      <code>/forward</code>
+      <span>Forward có tên (reply)</span>
+    </div>
+    <div class="cmd-item">
+      <code>/fwd_anon</code>
+      <span>Forward ẩn tên (reply)</span>
+    </div>
+    <div class="cmd-item">
+      <code>/clone_topic [tên]</code>
+      <span>Clone chủ đề sang forum mới</span>
+    </div>
+    <div class="cmd-item">
+      <code>/stats</code>
+      <span>Thống kê bot</span>
+    </div>
+    <div class="cmd-item">
+      <code>/links</code>
+      <span>Danh sách link gần đây</span>
+    </div>
+    <div class="cmd-item">
+      <code>/del_link &lt;token&gt;</code>
+      <span>Xóa link chia sẻ</span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+async function refreshStats() {
+  const res = await fetch('/api/stats');
+  const j = await res.json();
+  const d = j.data;
+
+  // Update stat cards
+  document.querySelectorAll('.stat-number')[0].textContent = d.total_links;
+  document.querySelectorAll('.stat-number')[1].textContent = d.total_views;
+  document.querySelectorAll('.stat-number')[2].textContent = d.total_topics;
+  document.querySelectorAll('.stat-number')[3].textContent = d.total_forwards;
+
+  // Update type chart
+  if (window._typeChart) {
+    const types = Object.keys(d.by_type);
+    const counts = Object.values(d.by_type);
+    window._typeChart.data.labels = types;
+    window._typeChart.data.datasets[0].data = counts;
+    window._typeChart.update();
+  }
+}
+
+async function deleteLink(token) {
+  if (!confirm(`Xóa link ${token}?`)) return;
+  await fetch(`/api/links/${token}`, { method: 'DELETE' });
+  location.reload();
+}
+
+// Activity chart (placeholder data – replace with real API)
+const actCtx = document.getElementById('activityChart').getContext('2d');
+new Chart(actCtx, {
+  type: 'line',
+  data: {
+    labels: ['T2','T3','T4','T5','T6','T7','CN'],
+    datasets: [{
+      label: 'Lượt xem link',
+      data: [12, 19, 8, 25, 18, 30, 22],
+      borderColor: '#4f8ef7',
+      backgroundColor: 'rgba(79,142,247,0.12)',
+      tension: 0.4,
+      fill: true
+    },{
+      label: 'Forward',
+      data: [5, 8, 3, 12, 7, 15, 10],
+      borderColor: '#6ee7b7',
+      backgroundColor: 'rgba(110,231,183,0.12)',
+      tension: 0.4,
+      fill: true
+    }]
+  },
+  options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+});
+
+// Type pie chart
+fetch('/api/stats').then(r => r.json()).then(j => {
+  const d = j.data.by_type;
+  const typeCtx = document.getElementById('typeChart').getContext('2d');
+  const COLORS = ['#4f8ef7','#6ee7b7','#f59e0b','#f87171','#a78bfa','#34d399','#fb923c'];
+  window._typeChart = new Chart(typeCtx, {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(d),
+      datasets: [{ data: Object.values(d), backgroundColor: COLORS, borderWidth: 2 }]
+    },
+    options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+  });
+});
+</script>
+{% endblock %}

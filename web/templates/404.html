@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}404 – Không tìm thấy{% endblock %}
+{% block page_title %}404{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="error-code">404</div>
+  <div class="error-msg">Trang hoặc link không tồn tại.</div>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-primary">↩️ Về trang chủ</a>
+</div>
+{% endblock %}

@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}Phiên Mới – Forwarder{% endblock %}
+{% block page_title %}➕ Tạo Phiên Forward Mới{% endblock %}
+
+{% block content %}
+<!-- Mode selector tabs -->
+<div class="tab-bar">
+  <button class="tab active" id="tab-forward" onclick="switchMode('forward')">📤 Forward Thường</button>
+  <button class="tab" id="tab-backup" onclick="switchMode('backup')">📦 Backup Forum</button>
+  <button class="tab" id="tab-relink" onclick="switchMode('relink')">🔧 Sửa Link</button>
+</div>
+
+<form method="POST" action="{{ url_for('forwarder_start') }}" id="sessionForm">
+  <input type="hidden" name="mode" id="modeInput" value="forward" />
+
+  <!-- Common fields -->
+  <div class="card" id="section-channels">
+    <div class="card-header"><h2 class="card-title">📡 Kênh Nguồn & Đích</h2></div>
+    <div class="form-grid">
+      <div class="form-group" id="src-group">
+        <label>📥 Kênh NGUỒN</label>
+        <input type="text" name="src_raw" class="form-control"
+               placeholder="ID (-100…) / @username / https://t.me/c/…/123" />
+        <small>
+          • ID/username/link kênh → clone TẤT CẢ topics<br/>
+          • Link 1 topic <code>t.me/c/.../2075/167532</code> → (Backup) chỉ clone topic 2075 từ msg đó
+        </small>
+      </div>
+      <div class="form-group">
+        <label id="dst-label">📤 Kênh ĐÍCH</label>
+        <input type="text" name="dst_raw" class="form-control"
+               placeholder="ID (-100…) / @username / https://t.me/…" />
+        <small id="dst-hint"></small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relink options -->
+  <div class="card hidden" id="section-relink">
+    <div class="card-header"><h2 class="card-title">🔧 Sửa Link Bot Cũ → Mới</h2></div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1">
+        <div class="info-card" style="margin:0">
+          <div class="info-icon">💡</div>
+          <div>
+            Khi bot cũ chết, các bài đã clone vẫn còn link bot cũ.
+            Tool quét forum ĐÍCH, thay link bot cũ → bot mới (giữ nguyên token).
+            Chỉ sửa được bài do tài khoản userbot này đăng.
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>🤖 Username bot CŨ (đã chết)</label>
+        <input type="text" name="old_bot" class="form-control"
+               placeholder="botcu (không @) — để trống = tự bắt mọi link bot" />
+        <small>Để trống → tool tự nhận diện mọi <code>t.me/...?start=TOKEN</code></small>
+      </div>
+      <div class="form-group">
+        <label>🔗 Link MỚI dùng</label>
+        <input type="text" name="new_link_base" class="form-control"
+               placeholder="auto (theo LINK_MODE) / botmoi / https://domain.com/d" />
+        <small><code>auto</code> = dùng bot/web hiện tại trong .env</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Forward options -->
+  <div class="card" id="section-forward">
+    <div class="card-header"><h2 class="card-title">⚙️ Tuỳ Chọn Forward</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>🔗 Bắt đầu từ Message ID</label>
+        <input type="number" name="start_msg_id" class="form-control"
+               placeholder="Để trống = từ đầu" min="0" />
+        <small>Hoặc dán link tin nhắn vào ô Nguồn, ID sẽ được parse tự động</small>
+      </div>
+      <div class="form-group">
+        <label>🗂 Giới hạn Topic ID</label>
+        <input type="number" name="force_topic_id" class="form-control"
+               placeholder="Để trống = tất cả topics" min="0" />
+        <small>Chỉ forward msg trong topic này</small>
+      </div>
+      <div class="form-group">
+        <label>🔄 Auto tạo topic ở kênh đích</label>
+        <label class="toggle">
+          <input type="checkbox" name="auto_topic" checked />
+          <span class="toggle-slider"></span>
+          <span>Bật — tự tạo topic nếu chưa có</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backup options -->
+  <div class="card hidden" id="section-backup">
+    <div class="card-header"><h2 class="card-title">📦 Tuỳ Chọn Backup Forum</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>🎨 Chế độ Icon Topic</label>
+        <select name="icon_mode" class="form-control" onchange="toggleEmojiInput(this.value)">
+          <option value="clone">Clone icon từ nguồn (khuyến nghị)</option>
+          <option value="fixed">Dùng 1 emoji cố định cho tất cả</option>
+          <option value="none">Chỉ title, không icon</option>
+        </select>
+      </div>
+      <div class="form-group" id="emoji-input-group" style="display:none">
+        <label>💎 Emoji ID hoặc link tin nhắn</label>
+        <input type="text" name="emoji_raw" class="form-control"
+               placeholder="https://t.me/… hoặc document_id (số)" />
+        <small>Dán link tin nhắn chứa emoji premium HOẶC document_id</small>
+      </div>
+      <div class="form-group">
+        <label>📌 Clone tin nhắn đã ghim</label>
+        <label class="toggle">
+          <input type="checkbox" name="clone_pins" checked />
+          <span class="toggle-slider"></span>
+          <span>Bật — ghim lại tin nhắn tương ứng ở topic đích</span>
+        </label>
+        <small>Sau khi forward xong mỗi topic, bot sẽ ghim các tin nhắn giống nguồn</small>
+      </div>
+      <div class="form-group">
+        <label>🏠 Bỏ qua General Topic</label>
+        <label class="toggle">
+          <input type="checkbox" name="skip_general" />
+          <span class="toggle-slider"></span>
+          <span>Tắt — forward cả General topic</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shared options -->
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">🎛 Tuỳ Chọn Chung</h2></div>
+    <div class="form-grid">
+
+      <!-- ★ LINK MODE — key feature ★ -->
+      <div class="form-group" style="grid-column:1/-1">
+        <div class="link-mode-box" id="linkModeBox">
+          <div class="link-mode-header">
+            <label class="toggle" style="gap:12px">
+              <input type="checkbox" name="link_mode" id="linkModeToggle"
+                     onchange="toggleLinkModeUI(this.checked)" />
+              <span class="toggle-slider"></span>
+              <span style="font-size:15px;font-weight:700">🔗 Chế Độ Link — Tự Động Chuyển Media → Share Link</span>
+            </label>
+          </div>
+          <div class="link-mode-desc">
+            <div class="link-mode-flow">
+              <div class="flow-step">
+                <div class="flow-icon">📋</div>
+                <div>Forum nguồn: album 3 ảnh + 1 video</div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">🤖</div>
+                <div>Bot lưu album → tạo <code>t.me/bot?start=TOKEN</code></div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">📤</div>
+                <div>Forum đích: album preview (ảnh + thumbnail) + <strong>1 link duy nhất</strong></div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">👆</div>
+                <div>User click link → Telegram mở → bot gửi <strong>nguyên album gốc</strong></div>
+              </div>
+            </div>
+            <table class="link-mode-table" style="margin-top:12px">
+              <tr>
+                <th>Loại post</th>
+                <th>Preview ở forum đích</th>
+                <th>Khi click link</th>
+              </tr>
+              <tr>
+                <td>🖼️ Album ảnh (5 ảnh)</td>
+                <td>Album 5 ảnh + link</td>
+                <td>Bot gửi 5 ảnh gốc chất lượng cao</td>
+              </tr>
+              <tr>
+                <td>🎬 Video đơn</td>
+                <td>Thumbnail + link</td>
+                <td>Bot gửi video gốc (full)</td>
+              </tr>
+              <tr>
+                <td>🖼️🎬 Hỗn hợp ảnh + video</td>
+                <td>Ảnh + thumbnail trong 1 album + link</td>
+                <td>Bot gửi cả ảnh lẫn video gốc</td>
+              </tr>
+              <tr>
+                <td>📄 File / Audio</td>
+                <td>Text với link</td>
+                <td>Bot gửi file gốc</td>
+              </tr>
+            </table>
+          </div>
+          <div id="linkModeExtra" class="hidden" style="margin-top:12px">
+            <div class="form-group">
+              <label>✏️ Caption Template (thương hiệu / footer)</label>
+              <textarea name="caption_template" class="form-control" rows="4"
+                        placeholder="📁 Media by @kênhcủabạn&#10;&#10;🔗 Nhấp vào link để xem:&#10;{url}"></textarea>
+              <small>
+                Placeholder: <code>{url}</code> = link bot, <code>{caption}</code> = caption gốc.<br/>
+                Ví dụ thêm thương hiệu:<br/>
+                <code>📁 Media by @kênhcủabạn<br/>{caption}<br/><br/>🔗 Xem: {url}</code><br/>
+                Để trống = chỉ hiện link mặc định.
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>📌 Filter Nội Dung</label>
+        <select name="only_filter" class="form-control">
+          <option value="all">Tất cả (văn bản + media)</option>
+          <option value="media">Chỉ media (ảnh + video + file + audio)</option>
+          <option value="video">Chỉ video</option>
+          <option value="photo">Chỉ ảnh</option>
+        </select>
+      </div>
+      <div class="form-group" id="hideSenderGroup">
+        <label>🙈 Ẩn tên người gửi</label>
+        <label class="toggle">
+          <input type="checkbox" name="hide_sender" />
+          <span class="toggle-slider"></span>
+          <span>Tắt — giữ nguyên "Forwarded from…"</span>
+        </label>
+        <small>Bật = dùng drop_author (không áp dụng khi link mode bật)</small>
+      </div>
+      <div class="form-group">
+        <label>🔔 Webhook URL (khi xong)</label>
+        <input type="text" name="webhook_url" class="form-control"
+               placeholder="https://your-webhook.com/endpoint (tuỳ chọn)" />
+        <small>Bot POST JSON tóm tắt kết quả khi hoàn thành</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" id="submitBtn">▶️ Bắt Đầu Phiên</button>
+    <a href="{{ url_for('forwarder_dashboard') }}" class="btn">↩️ Quay Lại</a>
+  </div>
+</form>
+
+<!-- Info boxes -->
+<div class="grid-2col" style="margin-top:8px">
+  <div class="card info-card">
+    <div class="info-icon">💡</div>
+    <div>
+      <strong>Về Forward Thường:</strong>
+      Forward từ kênh/topic cụ thể, bắt đầu từ message ID chọn trước.
+      Hỗ trợ cả kênh thường và forum có topics.
+      State được lưu → có thể resume nếu gián đoạn.
+    </div>
+  </div>
+  <div class="card info-card">
+    <div class="info-icon">📦</div>
+    <div>
+      <strong>Về Backup Forum:</strong>
+      Clone toàn bộ cấu trúc forum (topics + icon/màu) rồi forward tất cả tin nhắn.
+      Batch 50 msg/call, album giữ nguyên grouped_id.
+      Chạy lại sẽ resume từ chỗ dừng, không forward lại msg cũ.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentMode = 'forward';
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('modeInput').value = mode;
+  ['forward','backup','relink'].forEach(m => {
+    document.getElementById('tab-'+m).classList.toggle('active', mode === m);
+  });
+  document.getElementById('section-forward').classList.toggle('hidden', mode !== 'forward');
+  document.getElementById('section-backup').classList.toggle('hidden', mode !== 'backup');
+  document.getElementById('section-relink').classList.toggle('hidden', mode !== 'relink');
+
+  // Relink chỉ cần forum đích → ẩn ô nguồn, đổi nhãn đích
+  const srcGroup = document.getElementById('src-group');
+  const dstLabel = document.getElementById('dst-label');
+  const dstHint  = document.getElementById('dst-hint');
+  if (mode === 'relink') {
+    srcGroup.style.display = 'none';
+    dstLabel.textContent = '🎯 Forum ĐÍCH cần sửa link';
+    dstHint.textContent = 'Forum đã clone, chứa các link bot cũ cần thay';
+  } else {
+    srcGroup.style.display = '';
+    dstLabel.textContent = '📤 Kênh ĐÍCH';
+    dstHint.textContent = '';
+  }
+
+  const labels = { forward: '▶️ Bắt Đầu Forward', backup: '📦 Bắt Đầu Backup',
+                   relink: '🔧 Bắt Đầu Sửa Link' };
+  document.getElementById('submitBtn').textContent = labels[mode] || labels.forward;
+}
+
+function toggleEmojiInput(val) {
+  document.getElementById('emoji-input-group').style.display =
+    val === 'fixed' ? '' : 'none';
+}
+
+function toggleLinkModeUI(enabled) {
+  document.getElementById('linkModeExtra').classList.toggle('hidden', !enabled);
+  document.getElementById('hideSenderGroup').style.opacity = enabled ? '0.4' : '1';
+  document.getElementById('linkModeBox').classList.toggle('link-mode-active', enabled);
+}
+
+// Toggle label text based on checkbox state
+document.querySelectorAll('.toggle input[type=checkbox]').forEach(cb => {
+  cb.addEventListener('change', function() {
+    const span = this.nextElementSibling.nextElementSibling;
+    if (!span) return;
+    const onText  = this.dataset.on  || 'Bật';
+    const offText = this.dataset.off || span.textContent.replace('Bật','Tắt').replace('Tắt','Bật');
+  });
+});
+
+document.getElementById('sessionForm').addEventListener('submit', function() {
+  document.getElementById('submitBtn').textContent = '⏳ Đang khởi động…';
+  document.getElementById('submitBtn').disabled = true;
+});
+</script>
+{% endblock %}

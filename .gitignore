@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Environment
+.env
+
+# Database
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
+# Media files (stored locally)
+media/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+forwarder_state/
+backups/
