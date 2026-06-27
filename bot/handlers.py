@@ -829,14 +829,37 @@ async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Bắt text trong private chat — chủ yếu để nhận nội dung broadcast của admin."""
+    """
+    Bắt text trong private chat.
+    - Admin đang chờ broadcast → nội dung này là broadcast
+    - Còn lại → gợi ý cách dùng (text thuần không tạo link được)
+    """
     msg = update.message
     if not msg or update.effective_chat.type != "private":
         return
     user = update.effective_user
+
+    # Admin đang broadcast → phát nội dung
     if user.id in _broadcast_pending and is_admin(user.id):
         _broadcast_pending.discard(user.id)
         await _do_broadcast(ctx, msg, user)
+        return
+
+    record_user(user.id, user.full_name, user.username or "")
+
+    # Text thuần (không media) → gợi ý nhẹ
+    kb = None
+    if is_admin(user.id):
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🎛 Mở bảng điều khiển", callback_data="panel:main")
+        ]])
+    await msg.reply_text(
+        "💡 Gửi *ảnh / video / file* vào đây để tạo link chia sẻ.\n"
+        "Hoặc forward bài (kèm media) → bot trả link tự động.\n\n"
+        "Text thuần không tạo được link.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
 
 
 async def _do_broadcast(ctx: ContextTypes.DEFAULT_TYPE, msg, admin):
