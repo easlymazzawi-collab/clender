@@ -1232,3 +1232,117 @@ async def run_forum_backup(client: TelegramClient, cfg: dict,
         })
 
     return {"key": map_key, "count": total_forwarded, "stats": stats, "per_topic": per_topic_count}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RELINK — sửa link bot cũ → mới trong forum đích (khi thay bot)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def run_relink(client: TelegramClient, cfg: dict,
+                     progress_cb=None, stop_event=None):
+    """
+    Quét toàn bộ message trong forum đích, tìm caption chứa link bot CŨ
+    và thay bằng link bot MỚI (giữ nguyên TOKEN).
+
+    cfg:
+      dst_raw       : forum đích cần sửa (ID/username/link)
+      old_bot       : username bot cũ (vd 'botcu') HOẶC domain cũ
+      new_link_base : 'auto' → dùng LINK_MODE hiện tại
+                      hoặc chỉ định 't.me/botmoi' / 'https://domain.com/d'
+
+    Chỉ sửa được message do userbot này là author (đã forward bằng drop_author).
+    """
+    import re as _re
+    from config.settings import BOT_USERNAME, BASE_URL, LINK_MODE
+    from .link_sender import edit_caption_safe
+
+    dst_raw  = cfg["dst_raw"]
+    old_bot  = (cfg.get("old_bot") or "").lstrip("@").strip()
+
+    try:
+        dst_entity = await resolve_entity(client, dst_raw)
+    except Exception as e:
+        raise RuntimeError(f"Không resolve được forum đích: {e}")
+
+    dst_name = str(getattr(dst_entity, "title", dst_entity.id))
+    map_key  = f"relink_{dst_entity.id}"
+    save_session_meta(map_key, old_bot or "?", dst_name, "relink", cfg)
+
+    # Regex tìm token trong link cũ:
+    #   t.me/OLDBOT?start=TOKEN   hoặc  DOMAIN/d/TOKEN  (nếu old_bot là domain)
+    patterns = []
+    if old_bot:
+        patterns.append(_re.compile(
+            r'https?://t\.me/' + _re.escape(old_bot) + r'\?start=([A-Za-z0-9_-]+)',
+            _re.IGNORECASE))
+    # Bắt mọi t.me/<bất kỳ bot>?start=TOKEN (phòng khi không nhớ tên bot cũ)
+    patterns.append(_re.compile(
+        r'https?://t\.me/[A-Za-z0-9_]+\?start=([A-Za-z0-9_-]+)', _re.IGNORECASE))
+    # Bắt link web /d/TOKEN cũ (nếu đổi domain)
+    patterns.append(_re.compile(r'https?://[^\s]+/d/([A-Za-z0-9_-]+)', _re.IGNORECASE))
+
+    def _new_link(token: str) -> str:
+        base = cfg.get("new_link_base") or "auto"
+        if base == "auto":
+            if LINK_MODE == "web" and BASE_URL:
+                return f"{BASE_URL.rstrip('/')}/d/{token}"
+            return f"https://t.me/{BOT_USERNAME.lstrip('@')}?start={token}"
+        if base.startswith("http"):
+            return f"{base.rstrip('/')}/{token}" if "/d" in base else f"{base}?start={token}"
+        return f"https://t.me/{base.lstrip('@')}?start={token}"
+
+    scanned = edited = skipped = errors = 0
+
+    async for msg in client.iter_messages(dst_entity):
+        if stop_event and stop_event.is_set():
+            break
+        scanned += 1
+
+        text = getattr(msg, "message", None)
+        if not text:
+            continue
+
+        # Tìm token trong caption
+        token = None
+        for pat in patterns:
+            m = pat.search(text)
+            if m:
+                token = m.group(1)
+                break
+        if not token:
+            continue
+
+        new_url = _new_link(token)
+        if new_url in text:
+            skipped += 1
+            continue
+
+        # Thay TẤT CẢ link cũ trong caption bằng link mới
+        new_text = text
+        for pat in patterns:
+            new_text = pat.sub(new_url, new_text)
+
+        if new_text == text:
+            skipped += 1
+            continue
+
+        ok = await edit_caption_safe(client, dst_entity, msg.id,
+                                     new_text, getattr(msg, "entities", None))
+        if ok:
+            edited += 1
+        else:
+            errors += 1
+
+        if progress_cb and scanned % 10 == 0:
+            progress_cb({"phase": "relink", "scanned": scanned,
+                         "edited": edited, "skipped": skipped, "errors": errors})
+        await asyncio.sleep(1.0)   # tránh flood edit
+
+    final = {"phase": "done", "scanned": scanned, "edited": edited,
+             "skipped": skipped, "errors": errors, "total_forwarded": edited}
+    save_session_meta(map_key, old_bot or "?", dst_name, "relink", cfg, progress=final)
+    if progress_cb:
+        progress_cb(final)
+
+    logger.info(f"Relink xong: scanned={scanned} edited={edited} skipped={skipped} errors={errors}")
+    return {"key": map_key, "count": edited, "stats": final}

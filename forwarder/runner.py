@@ -16,7 +16,7 @@ from .state import (
     save_session_meta, sync_file_sessions_to_db,
     STATE_DIR,
 )
-from .core import run_session, run_forum_backup
+from .core import run_session, run_forum_backup, run_relink
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,10 @@ async def _async_run(client_config, cfg, mode, stop_event,
             result = await run_forum_backup(client, cfg,
                                             progress_cb=progress_cb,
                                             stop_event=stop_event)
+        elif mode == "relink":
+            result = await run_relink(client, cfg,
+                                      progress_cb=progress_cb,
+                                      stop_event=stop_event)
         else:
             result = await run_session(client, cfg,
                                        progress_cb=progress_cb,

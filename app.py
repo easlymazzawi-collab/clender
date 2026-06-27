@@ -308,11 +308,15 @@ def forwarder_start():
 
     src_in = f.get("src_raw", "").strip()
     dst_in = f.get("dst_raw", "").strip()
-    if not src_in or not dst_in:
+
+    # Relink chỉ cần forum đích; các mode khác cần cả nguồn lẫn đích
+    if mode == "relink":
+        if not dst_in:
+            return jsonify({"ok": False, "error": "Thiếu forum đích cần sửa link"}), 400
+        src_in = src_in or dst_in   # placeholder
+    elif not src_in or not dst_in:
         return jsonify({"ok": False, "error": "Thiếu kênh nguồn hoặc đích"}), 400
 
-    # Parse link → tách channel ID + topic_id + message_id
-    # (chấp nhận cả link đầy đủ https://t.me/c/.../.../... lẫn ID/username)
     src_parsed = parse_link(src_in)
     dst_parsed = parse_link(dst_in)
 
@@ -328,7 +332,11 @@ def forwarder_start():
     cfg["link_mode"]        = f.get("link_mode") == "on"
     cfg["caption_template"] = f.get("caption_template", "").strip() or None
 
-    if mode == "backup":
+    if mode == "relink":
+        # Sửa link bot cũ → mới trong forum đích (dst_raw)
+        cfg["old_bot"]       = f.get("old_bot", "").strip()
+        cfg["new_link_base"] = f.get("new_link_base", "auto").strip() or "auto"
+    elif mode == "backup":
         cfg["icon_mode"]    = f.get("icon_mode", "clone")
         cfg["emoji_raw"]    = f.get("emoji_raw", "").strip()
         cfg["skip_general"] = f.get("skip_general") == "on"

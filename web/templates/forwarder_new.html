@@ -7,18 +7,19 @@
 <div class="tab-bar">
   <button class="tab active" id="tab-forward" onclick="switchMode('forward')">📤 Forward Thường</button>
   <button class="tab" id="tab-backup" onclick="switchMode('backup')">📦 Backup Forum</button>
+  <button class="tab" id="tab-relink" onclick="switchMode('relink')">🔧 Sửa Link</button>
 </div>
 
 <form method="POST" action="{{ url_for('forwarder_start') }}" id="sessionForm">
   <input type="hidden" name="mode" id="modeInput" value="forward" />
 
   <!-- Common fields -->
-  <div class="card">
+  <div class="card" id="section-channels">
     <div class="card-header"><h2 class="card-title">📡 Kênh Nguồn & Đích</h2></div>
     <div class="form-grid">
-      <div class="form-group">
+      <div class="form-group" id="src-group">
         <label>📥 Kênh NGUỒN</label>
-        <input type="text" name="src_raw" class="form-control" required
+        <input type="text" name="src_raw" class="form-control"
                placeholder="ID (-100…) / @username / https://t.me/c/…/123" />
         <small>
           • ID/username/link kênh → clone TẤT CẢ topics<br/>
@@ -26,9 +27,39 @@
         </small>
       </div>
       <div class="form-group">
-        <label>📤 Kênh ĐÍCH</label>
-        <input type="text" name="dst_raw" class="form-control" required
+        <label id="dst-label">📤 Kênh ĐÍCH</label>
+        <input type="text" name="dst_raw" class="form-control"
                placeholder="ID (-100…) / @username / https://t.me/…" />
+        <small id="dst-hint"></small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relink options -->
+  <div class="card hidden" id="section-relink">
+    <div class="card-header"><h2 class="card-title">🔧 Sửa Link Bot Cũ → Mới</h2></div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1">
+        <div class="info-card" style="margin:0">
+          <div class="info-icon">💡</div>
+          <div>
+            Khi bot cũ chết, các bài đã clone vẫn còn link bot cũ.
+            Tool quét forum ĐÍCH, thay link bot cũ → bot mới (giữ nguyên token).
+            Chỉ sửa được bài do tài khoản userbot này đăng.
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>🤖 Username bot CŨ (đã chết)</label>
+        <input type="text" name="old_bot" class="form-control"
+               placeholder="botcu (không @) — để trống = tự bắt mọi link bot" />
+        <small>Để trống → tool tự nhận diện mọi <code>t.me/...?start=TOKEN</code></small>
+      </div>
+      <div class="form-group">
+        <label>🔗 Link MỚI dùng</label>
+        <input type="text" name="new_link_base" class="form-control"
+               placeholder="auto (theo LINK_MODE) / botmoi / https://domain.com/d" />
+        <small><code>auto</code> = dùng bot/web hiện tại trong .env</small>
       </div>
     </div>
   </div>
@@ -243,12 +274,30 @@ let currentMode = 'forward';
 function switchMode(mode) {
   currentMode = mode;
   document.getElementById('modeInput').value = mode;
-  document.getElementById('tab-forward').classList.toggle('active', mode === 'forward');
-  document.getElementById('tab-backup').classList.toggle('active', mode === 'backup');
+  ['forward','backup','relink'].forEach(m => {
+    document.getElementById('tab-'+m).classList.toggle('active', mode === m);
+  });
   document.getElementById('section-forward').classList.toggle('hidden', mode !== 'forward');
   document.getElementById('section-backup').classList.toggle('hidden', mode !== 'backup');
-  document.getElementById('submitBtn').textContent =
-    mode === 'backup' ? '📦 Bắt Đầu Backup' : '▶️ Bắt Đầu Forward';
+  document.getElementById('section-relink').classList.toggle('hidden', mode !== 'relink');
+
+  // Relink chỉ cần forum đích → ẩn ô nguồn, đổi nhãn đích
+  const srcGroup = document.getElementById('src-group');
+  const dstLabel = document.getElementById('dst-label');
+  const dstHint  = document.getElementById('dst-hint');
+  if (mode === 'relink') {
+    srcGroup.style.display = 'none';
+    dstLabel.textContent = '🎯 Forum ĐÍCH cần sửa link';
+    dstHint.textContent = 'Forum đã clone, chứa các link bot cũ cần thay';
+  } else {
+    srcGroup.style.display = '';
+    dstLabel.textContent = '📤 Kênh ĐÍCH';
+    dstHint.textContent = '';
+  }
+
+  const labels = { forward: '▶️ Bắt Đầu Forward', backup: '📦 Bắt Đầu Backup',
+                   relink: '🔧 Bắt Đầu Sửa Link' };
+  document.getElementById('submitBtn').textContent = labels[mode] || labels.forward;
 }
 
 function toggleEmojiInput(val) {
