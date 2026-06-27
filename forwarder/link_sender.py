@@ -48,22 +48,73 @@ def _get_caption(msg: Message) -> str:
     return (getattr(msg, "message", None) or getattr(msg, "text", None) or "").strip()
 
 
+def _get_caption_raw(msg: Message) -> tuple[str, list]:
+    """
+    Lấy caption GỐC + entities (giữ emoji premium, bold, link ẩn…).
+    Trả về (text, entities). text KHÔNG strip để giữ đúng offset entities.
+    """
+    text = getattr(msg, "message", None) or getattr(msg, "text", None) or ""
+    entities = list(getattr(msg, "entities", None) or [])
+    return text, entities
+
+
+def _utf16_len(s: str) -> int:
+    """Độ dài chuỗi tính theo UTF-16 code units (chuẩn offset của Telegram)."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _shift_entities(entities: list, offset_utf16: int) -> list:
+    """Dịch offset của tất cả entities thêm offset_utf16 (UTF-16 units)."""
+    if not entities or offset_utf16 == 0:
+        return entities
+    shifted = []
+    for e in entities:
+        try:
+            import copy
+            e2 = copy.copy(e)
+            e2.offset = e.offset + offset_utf16
+            shifted.append(e2)
+        except Exception:
+            shifted.append(e)
+    return shifted
+
+
 def _build_caption(orig_cap: str, url: str, template: Optional[str] = None) -> str:
-    """
-    Ghép caption cuối cùng.
-    Template hỗ trợ 2 placeholder:
-      {url}     → bot deep link
-      {caption} → caption gốc (nếu có)
-    Nếu template không có {caption} → tự động prepend caption gốc.
-    """
+    """Phiên bản text-only (không entities) — dùng cho fallback/text message."""
     tpl = (template or LINK_CAPTION_TEMPLATE).replace("\\n", "\n")
-
     if "{caption}" in tpl:
-        # User tự kiểm soát vị trí caption gốc
         return tpl.format(url=url.strip(), caption=orig_cap)
-
     link_block = tpl.format(url=url.strip())
     return f"{orig_cap}\n\n{link_block}" if orig_cap else link_block
+
+
+def _build_caption_entities(orig_text: str, orig_entities: list,
+                            url: str, template: Optional[str] = None) -> tuple[str, list]:
+    """
+    Ghép caption cuối + GIỮ entities gốc (emoji premium, link ẩn…).
+    Dịch offset entities theo UTF-16 nếu caption không nằm ở đầu.
+    Trả về (final_text, final_entities).
+    """
+    tpl = (template or LINK_CAPTION_TEMPLATE).replace("\\n", "\n")
+    url = url.strip()
+
+    if "{caption}" in tpl:
+        # Thay {url} trước → tìm vị trí {caption} → tính offset
+        tpl_with_url = tpl.replace("{url}", url)
+        idx = tpl_with_url.index("{caption}")
+        prefix = tpl_with_url[:idx]
+        suffix = tpl_with_url[idx + len("{caption}"):]
+        final_text = prefix + orig_text + suffix
+        offset = _utf16_len(prefix)
+        final_entities = _shift_entities(orig_entities, offset)
+        return final_text, final_entities
+
+    # Default: caption GỐC ở đầu (offset 0 → entities giữ nguyên) + link phía sau
+    link_block = tpl.format(url=url)
+    if orig_text:
+        final_text = f"{orig_text}\n\n{link_block}"
+        return final_text, orig_entities  # offset 0, không cần dịch
+    return link_block, []
 
 
 # ─── Media type ───────────────────────────────────────────────────────────────
@@ -168,9 +219,9 @@ async def send_preview_single(
     Gửi preview của 1 message sang đích + caption gốc + link.
     Video → thumbnail. Ảnh → ảnh. Click link → bot trả bản gốc.
     """
-    orig_cap   = _get_caption(msg)
+    orig_text, orig_ent = _get_caption_raw(msg)
     token, url = store_single_token(msg)
-    full_cap   = _build_caption(orig_cap, url, caption_template)
+    full_cap, full_ent = _build_caption_entities(orig_text, orig_ent, url, caption_template)
 
     kw = {}
     if dst_topic_id and dst_topic_id != 1:
@@ -181,6 +232,7 @@ async def send_preview_single(
         return await client.send_file(
             dst_entity, file=preview,
             caption=full_cap[:1024],
+            formatting_entities=full_ent or None,
             force_document=False,
             **kw,
         )
@@ -207,9 +259,15 @@ async def send_preview_album(
     if not msgs:
         return []
 
-    orig_cap   = next((_get_caption(m) for m in msgs if _get_caption(m)), "")
+    # Lấy caption gốc + entities (từ item đầu tiên có caption)
+    orig_text, orig_ent = "", []
+    for m in msgs:
+        t, e = _get_caption_raw(m)
+        if t.strip():
+            orig_text, orig_ent = t, e
+            break
     token, url = store_album_token(msgs)
-    full_cap   = _build_caption(orig_cap, url, caption_template)
+    full_cap, full_ent = _build_caption_entities(orig_text, orig_ent, url, caption_template)
 
     kw = {}
     if dst_topic_id and dst_topic_id != 1:
@@ -223,16 +281,19 @@ async def send_preview_album(
             previews.append(p)
 
     if not previews:
-        # Không có preview nào → gửi text + link
-        return [await client.send_message(dst_entity, message=full_cap[:4096], **kw)]
+        return [await client.send_message(
+            dst_entity, message=full_cap[:4096],
+            formatting_entities=full_ent or None, **kw)]
 
     n = len(previews)
+    # Caption + entities chỉ gắn vào item cuối của album
     captions = [""] * (n - 1) + [full_cap[:1024]]
 
     try:
         result = await client.send_file(
             dst_entity, file=previews,
             caption=captions,
+            formatting_entities=full_ent or None,
             force_document=False,
             **kw,
         )
