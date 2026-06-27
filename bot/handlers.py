@@ -643,11 +643,40 @@ async def cmd_forcejoin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if val.lower() in ("off", "0", "tắt"):
         set_setting("force_join_channel", "")
         await update.message.reply_text("✅ Đã tắt force-join.")
-    else:
-        val = _normalize_channel(val)
+        return
+
+    val = _normalize_channel(val)
+
+    # Kiểm tra ngay: bot có truy cập được kênh không?
+    try:
+        chat = await ctx.bot.get_chat(val)
+        # Kiểm tra bot có phải member/admin để xem được danh sách thành viên
+        try:
+            me = await ctx.bot.get_me()
+            cm = await ctx.bot.get_chat_member(val, me.id)
+            bot_in = cm.status in ("member", "administrator", "creator")
+        except Exception:
+            bot_in = False
+
         set_setting("force_join_channel", val)
+        warn = "" if bot_in else (
+            "\n\n⚠️ *Bot CHƯA ở trong kênh này!*\n"
+            "Hãy thêm bot vào kênh `" + val + "` (làm member hoặc admin)\n"
+            "nếu không bot không kiểm tra được thành viên."
+        )
         await update.message.reply_text(
-            f"✅ Force-join bật: `{val}`\n⚠️ Bot phải là Admin trong kênh đó.",
+            f"✅ Force-join bật: `{val}`\n"
+            f"📋 Tên kênh: {chat.title}{warn}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Bot không truy cập được kênh `{val}`\n"
+            f"Lỗi: {e}\n\n"
+            "Kiểm tra:\n"
+            "• Username/link đúng chưa?\n"
+            "• Kênh public, hoặc bot đã được thêm vào kênh private?\n\n"
+            "Force-join CHƯA được bật.",
             parse_mode=ParseMode.MARKDOWN
         )
 

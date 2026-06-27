@@ -95,16 +95,29 @@ MEMBER_STATUSES = {
 async def is_member(bot: Bot, user_id: int, channel: str) -> bool:
     """
     Ask Telegram API whether user_id is a member of channel.
-    Returns False on any error (bot not in channel, user not found, etc.)
+
+    - User chắc chắn KHÔNG ở kênh (status left/kicked) → False (chặn)
+    - Lỗi cấu hình (bot không vào kênh, sai username) → True (fail-open,
+      tránh khóa toàn bộ user vì admin cấu hình sai)
     """
     try:
-        # Convert "@username" or "-100xxx" to something get_chat_member accepts
-        chat_id = channel if channel.lstrip("-").isdigit() else channel
-        cm = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        return cm.status in MEMBER_STATUSES
+        cm = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+        is_in = cm.status in MEMBER_STATUSES
+        if not is_in:
+            logger.info(f"is_member: user {user_id} KHÔNG ở {channel} (status={cm.status})")
+        return is_in
     except Exception as e:
-        logger.warning(f"is_member({user_id}, {channel}): {e}")
-        # If bot can't check (not admin in channel, etc.) → allow to avoid blocking everyone
+        msg = str(e).lower()
+        # Lỗi cấu hình → fail-open (cho qua) nhưng cảnh báo rõ
+        if "not found" in msg or "invalid" in msg or "no rights" in msg:
+            logger.warning(
+                f"⚠️ FORCE-JOIN CẤU HÌNH SAI: bot không truy cập được kênh '{channel}' "
+                f"({e}). Đang cho qua để không khóa user. "
+                f"Dùng /forcejoin @kênh để set lại."
+            )
+            return True
+        # Lỗi khác (user bị hạn chế...) → fail-open
+        logger.warning(f"is_member({user_id}, {channel}): {e} — cho qua")
         return True
 
 
