@@ -250,8 +250,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: dict):
     """
-    Serve an album to the user via copy_message (no 'Forwarded from').
-    Falls back to forward_message if copy fails.
+    Serve an album to the user.
+
+    Strategy:
+      1. copy_messages() — send ALL at once, Telegram preserves album grouping.
+         No 'Forwarded from' shown. Requires Bot API 6.4+ (PTB 20.3+).
+      2. forward_messages() — same but shows 'Forwarded from'.
+      3. Individual copy_message() per item — last resort (breaks album).
     """
     chat_id     = update.effective_chat.id
     src_chat_id = album["src_chat_id"]
@@ -262,10 +267,33 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
         return
 
     n = len(src_msg_ids)
-    notice = await update.message.reply_text(
-        f"⏳ Đang gửi {'1 file' if n == 1 else f'{n} files'}…"
-    )
 
+    # ── 1. copy_messages (batch, no Forwarded-from, preserves album) ──────────
+    try:
+        result = await ctx.bot.copy_messages(
+            chat_id=chat_id,
+            from_chat_id=src_chat_id,
+            message_ids=src_msg_ids,
+        )
+        # copy_messages returns list of MessageId objects when successful
+        if result and len(result) > 0:
+            return
+    except Exception as e:
+        logger.warning(f"copy_messages failed: {e} — trying forward_messages")
+
+    # ── 2. forward_messages (batch, shows Forwarded-from, preserves album) ────
+    try:
+        result = await ctx.bot.forward_messages(
+            chat_id=chat_id,
+            from_chat_id=src_chat_id,
+            message_ids=src_msg_ids,
+        )
+        if result and len(result) > 0:
+            return
+    except Exception as e:
+        logger.warning(f"forward_messages failed: {e} — falling back to individual sends")
+
+    # ── 3. Individual sends (last resort) ────────────────────────────────────
     sent = 0
     for msg_id in src_msg_ids:
         try:
@@ -275,8 +303,8 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
                 message_id=msg_id,
             )
             sent += 1
-            await asyncio.sleep(0.3)
-        except Exception as copy_err:
+            await asyncio.sleep(0.2)
+        except Exception as e1:
             try:
                 await ctx.bot.forward_message(
                     chat_id=chat_id,
@@ -284,18 +312,9 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
                     message_id=msg_id,
                 )
                 sent += 1
-                await asyncio.sleep(0.3)
-            except Exception as fwd_err:
-                logger.warning(
-                    f"serve_album msg {msg_id} from {src_chat_id}: "
-                    f"copy={copy_err} | fwd={fwd_err}"
-                )
-
-    # Delete loading notice
-    try:
-        await notice.delete()
-    except Exception:
-        pass
+                await asyncio.sleep(0.2)
+            except Exception as e2:
+                logger.warning(f"Cannot send msg {msg_id}: copy={e1} | fwd={e2}")
 
     if sent == 0:
         await update.message.reply_text(
