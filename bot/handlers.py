@@ -32,8 +32,12 @@ from database.models import (
     log_forward, get_setting, set_setting, all_settings,
     get_media_album, list_media_albums, get_conn,
     create_album_from_file_ids,
+    record_user, list_user_ids, count_users, mark_user_blocked,
 )
 from utils.token import generate_numeric_token
+
+# Admin đang chờ nhập nội dung broadcast: {admin_id: True}
+_broadcast_pending: set = set()
 from bot.membership import gate, invalidate as invalidate_membership_cache
 
 logger = logging.getLogger(__name__)
@@ -177,6 +181,7 @@ async def _create_link(msg, user_id: int, user_name: str) -> str | None:
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    record_user(user.id, user.full_name, user.username or "")
 
     if ctx.args:
         token = ctx.args[0].strip()
@@ -724,10 +729,19 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or update.effective_chat.type != "private":
         return
+
+    user = update.effective_user
+
+    # Admin đang broadcast → media này là nội dung broadcast
+    if user.id in _broadcast_pending and is_admin(user.id):
+        _broadcast_pending.discard(user.id)
+        await _do_broadcast(ctx, msg, user)
+        return
+
     if not await gate(update, ctx):
         return
 
-    user = update.effective_user
+    record_user(user.id, user.full_name, user.username or "")
     fi   = extract_file_info(msg)
     if not fi:
         return
@@ -741,6 +755,8 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── Album: gom theo media_group_id ────────────────────────────────────────
+    # Lưu message_id (không phải file_id) để serve bằng copy_messages
+    # → giữ NGUYÊN caption premium emoji + entities.
     mgid = msg.media_group_id
     if mgid:
         key = f"{user.id}_{mgid}"
@@ -748,21 +764,17 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if entry and entry.get("task"):
             entry["task"].cancel()
         if not entry:
-            entry = {"items": [], "msg": msg, "cap": ""}
+            entry = {"msg_ids": [], "msg": msg, "first_fi": fi}
             _album_buf[key] = entry
-        entry["items"].append({"type": fi["file_type"], "file_id": fi["file_id"]})
-        if msg.caption and not entry["cap"]:
-            entry["cap"] = msg.caption
-        # Hẹn flush sau delay (mỗi phần mới reset timer)
-        entry["task"] = asyncio.create_task(
-            _flush_album(key, ctx, user)
-        )
+        entry["msg_ids"].append(msg.message_id)
+        entry["task"] = asyncio.create_task(_flush_album(key, ctx, user))
         return
 
-    # ── Single media → 1 link ────────────────────────────────────────────────
-    token = await _create_link(msg, user.id, user.full_name)
-    if not token:
-        return
+    # ── Single media → 1 link (lưu message_id, serve qua copy_messages) ───────
+    from database.models import create_media_album
+    token = generate_numeric_token(16)
+    create_media_album(token, user.id, [msg.message_id], msg.caption or "")
+
     url      = build_share_url(token)
     orig_cap = (msg.caption or msg.text or "").strip()
     full_cap = _caption_with_link(orig_cap, url)
@@ -776,40 +788,91 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
-    """Sau khi gom đủ các phần album → tạo 1 token + trả 1 link."""
+    """Sau khi gom đủ album → tạo 1 token (lưu message_ids) + trả 1 link."""
     try:
         await asyncio.sleep(_ALBUM_FLUSH_DELAY)
     except asyncio.CancelledError:
-        return   # có phần mới đến → timer reset, lần sau flush
-
-    entry = _album_buf.pop(key, None)
-    if not entry or not entry["items"]:
         return
 
-    items = entry["items"]
-    cap   = entry["cap"]
-    msg   = entry["msg"]
+    entry = _album_buf.pop(key, None)
+    if not entry or not entry["msg_ids"]:
+        return
 
-    # Tạo 1 token cho cả album (lưu file_ids để bot gửi lại)
+    from database.models import create_media_album
+    msg_ids = entry["msg_ids"]
+    msg     = entry["msg"]
+    fi      = entry["first_fi"]
+
+    # Lưu message_ids trong chat user↔bot → serve bằng copy_messages
+    # (giữ premium emoji + album nguyên vẹn)
     token = generate_numeric_token(16)
-    create_album_from_file_ids(token, items, cap)
+    create_media_album(token, user.id, msg_ids, msg.caption or "")
 
     url      = build_share_url(token)
-    full_cap = _caption_with_link(cap.strip(), url)
+    full_cap = _caption_with_link((msg.caption or "").strip(), url)
 
-    # Preview: thumbnail/ảnh đầu + caption link
-    first = items[0]
+    # Preview: ảnh/thumbnail đầu + caption link
     try:
-        if first["type"] == "photo":
-            await msg.reply_photo(photo=first["file_id"], caption=full_cap[:1024])
+        if fi["file_type"] == "photo":
+            await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
+        elif fi.get("thumb_file_id"):
+            await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
         else:
-            # video/file → gửi text link (đơn giản, tránh tải thumbnail phức tạp)
-            await msg.reply_text(
-                f"📦 Album {len(items)} media\n\n{full_cap}"[:4096]
-            )
+            await msg.reply_text(f"📦 Album {len(msg_ids)} media\n\n{full_cap}"[:4096])
     except Exception as e:
         logger.warning(f"_flush_album reply: {e}")
         await msg.reply_text(full_cap[:4096])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BROADCAST
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Bắt text trong private chat — chủ yếu để nhận nội dung broadcast của admin."""
+    msg = update.message
+    if not msg or update.effective_chat.type != "private":
+        return
+    user = update.effective_user
+    if user.id in _broadcast_pending and is_admin(user.id):
+        _broadcast_pending.discard(user.id)
+        await _do_broadcast(ctx, msg, user)
+
+
+async def _do_broadcast(ctx: ContextTypes.DEFAULT_TYPE, msg, admin):
+    """Phát nội dung msg tới tất cả user đã dùng bot (copy_message giữ định dạng)."""
+    user_ids = list_user_ids(only_active=True)
+    total    = len(user_ids)
+    notice = await msg.reply_text(f"📨 Đang gửi tới {total} người dùng…")
+
+    sent = fail = 0
+    for uid in user_ids:
+        try:
+            await ctx.bot.copy_message(
+                chat_id=uid,
+                from_chat_id=msg.chat_id,
+                message_id=msg.message_id,
+            )
+            sent += 1
+        except Exception as e:
+            fail += 1
+            em = str(e).lower()
+            if "blocked" in em or "deactivated" in em or "not found" in em:
+                mark_user_blocked(uid)
+        if (sent + fail) % 20 == 0:
+            await asyncio.sleep(1)   # tránh flood
+        else:
+            await asyncio.sleep(0.05)
+
+    try:
+        await notice.edit_text(
+            f"✅ *Broadcast xong!*\n\n"
+            f"📤 Gửi thành công: `{sent}`\n"
+            f"❌ Thất bại (chặn bot): `{fail}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -862,6 +925,7 @@ def _panel_main_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton("📢 Force-Join", callback_data="panel:forcejoin")],
         [InlineKeyboardButton("👥 Whitelist", callback_data="panel:whitelist"),
          InlineKeyboardButton("⚙️ Cài đặt khác", callback_data="panel:settings")],
+        [InlineKeyboardButton("📨 Gửi thông báo (broadcast)", callback_data="panel:broadcast")],
     ]
     # Chỉ thêm nút Web Admin nếu BASE_URL là URL công khai hợp lệ
     if _is_public_url(BASE_URL):
@@ -992,4 +1056,24 @@ async def _handle_panel(q, ctx, action: str):
             "`/set caption_template ...`",
             parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_back_kb()
         )
+        return
+
+    if action == "broadcast":
+        n = count_users()
+        _broadcast_pending.add(q.from_user.id)
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Hủy", callback_data="panel:bc_cancel")
+        ]])
+        await q.message.edit_text(
+            f"📨 *GỬI THÔNG BÁO*\n\n"
+            f"Sẽ gửi tới `{n}` người dùng đã dùng bot.\n\n"
+            "👉 Hãy gửi nội dung muốn broadcast (text/ảnh/video).\n"
+            "Tin nhắn tiếp theo bạn gửi sẽ được phát đi.",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=kb
+        )
+        return
+
+    if action == "bc_cancel":
+        _broadcast_pending.discard(q.from_user.id)
+        await _handle_panel(q, ctx, "main")
         return

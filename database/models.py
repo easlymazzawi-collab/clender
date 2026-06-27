@@ -91,6 +91,16 @@ def init_db() -> None:
             is_active    INTEGER  DEFAULT 1
         );
 
+        -- Người dùng bot (để gửi thông báo / broadcast)
+        CREATE TABLE IF NOT EXISTS bot_users (
+            user_id    INTEGER PRIMARY KEY,
+            name       TEXT,
+            username   TEXT,
+            first_seen DATETIME DEFAULT (datetime('now')),
+            last_seen  DATETIME DEFAULT (datetime('now')),
+            is_blocked INTEGER DEFAULT 0
+        );
+
         CREATE INDEX IF NOT EXISTS idx_media_token  ON media_links(token);
         CREATE INDEX IF NOT EXISTS idx_album_token  ON media_albums(token);
         CREATE INDEX IF NOT EXISTS idx_fwd_source   ON forward_log(source_chat_id, source_msg_id);
@@ -351,5 +361,45 @@ def list_media_albums(limit: int = 50, offset: int = 0) -> list[dict]:
 def delete_media_album(token: str):
     conn = get_conn()
     conn.execute("UPDATE media_albums SET is_active=0 WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+
+# ─── Bot users (broadcast) ────────────────────────────────────────────────────
+
+def record_user(user_id: int, name: str = "", username: str = ""):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO bot_users (user_id, name, username, last_seen)
+           VALUES (?,?,?,datetime('now'))
+           ON CONFLICT(user_id) DO UPDATE SET
+               name=excluded.name, username=excluded.username,
+               last_seen=datetime('now'), is_blocked=0""",
+        (user_id, name, username)
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_user_ids(only_active: bool = True) -> list[int]:
+    conn = get_conn()
+    q = "SELECT user_id FROM bot_users"
+    if only_active:
+        q += " WHERE is_blocked=0"
+    rows = conn.execute(q).fetchall()
+    conn.close()
+    return [r["user_id"] for r in rows]
+
+
+def count_users() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM bot_users").fetchone()[0]
+    conn.close()
+    return n
+
+
+def mark_user_blocked(user_id: int):
+    conn = get_conn()
+    conn.execute("UPDATE bot_users SET is_blocked=1 WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()

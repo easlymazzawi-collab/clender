@@ -16,7 +16,7 @@ from bot.handlers import (
     cmd_settings, cmd_set,
     cmd_allow, cmd_disallow, cmd_whitelist,
     cmd_forcejoin, cmd_panel,
-    handle_media, handle_callback,
+    handle_media, handle_callback, handle_text,
 )
 
 logging.basicConfig(
@@ -63,6 +63,12 @@ def build_app():
         filters.AUDIO | filters.VOICE | filters.VIDEO_NOTE |
         filters.ANIMATION | filters.Sticker.ALL,
         handle_media
+    ))
+
+    # ── Text messages (broadcast content from admin) ───────────────────────────
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.PRIVATE & ~filters.COMMAND,
+        handle_text
     ))
 
     # ── Inline keyboard callbacks ──────────────────────────────────────────────
