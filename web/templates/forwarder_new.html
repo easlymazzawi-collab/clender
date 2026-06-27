@@ -163,10 +163,15 @@
           </div>
           <div id="linkModeExtra" class="hidden" style="margin-top:12px">
             <div class="form-group">
-              <label>✏️ Caption Template (tuỳ chỉnh)</label>
-              <input type="text" name="caption_template" class="form-control"
-                     placeholder="🔗 Nhấp vào link để xem:\n{url}  (Enter=mặc định)" />
-              <small>Dùng <code>{url}</code> làm chỗ chèn link. Để trống = dùng template trong .env</small>
+              <label>✏️ Caption Template (thương hiệu / footer)</label>
+              <textarea name="caption_template" class="form-control" rows="4"
+                        placeholder="📁 Media by @kênhcủabạn&#10;&#10;🔗 Nhấp vào link để xem:&#10;{url}"></textarea>
+              <small>
+                Placeholder: <code>{url}</code> = link bot, <code>{caption}</code> = caption gốc.<br/>
+                Ví dụ thêm thương hiệu:<br/>
+                <code>📁 Media by @kênhcủabạn<br/>{caption}<br/><br/>🔗 Xem: {url}</code><br/>
+                Để trống = chỉ hiện link mặc định.
+              </small>
             </div>
           </div>
         </div>

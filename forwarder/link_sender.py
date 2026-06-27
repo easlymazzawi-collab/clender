@@ -49,9 +49,21 @@ def _get_caption(msg: Message) -> str:
 
 
 def _build_caption(orig_cap: str, url: str, template: Optional[str] = None) -> str:
+    """
+    Ghép caption cuối cùng.
+    Template hỗ trợ 2 placeholder:
+      {url}     → bot deep link
+      {caption} → caption gốc (nếu có)
+    Nếu template không có {caption} → tự động prepend caption gốc.
+    """
     tpl = (template or LINK_CAPTION_TEMPLATE).replace("\\n", "\n")
-    link_line = tpl.format(url=url.strip())
-    return f"{orig_cap}\n\n{link_line}" if orig_cap else link_line
+
+    if "{caption}" in tpl:
+        # User tự kiểm soát vị trí caption gốc
+        return tpl.format(url=url.strip(), caption=orig_cap)
+
+    link_block = tpl.format(url=url.strip())
+    return f"{orig_cap}\n\n{link_block}" if orig_cap else link_block
 
 
 # ─── Media type ───────────────────────────────────────────────────────────────
@@ -90,18 +102,13 @@ def store_album_token(msgs: list) -> tuple[str, str]:
         if c and c not in seen:
             seen.add(c); caps.append(c)
     caption = "\n".join(caps)
-    # Debug: dump raw .message của từng item để xác định source có caption không
-    raw_dump = [(m.id, (getattr(m, "message", None) or "")[:30]) for m in msgs]
-    logger.info(f"store_album: caption={'có' if caption else 'TRỐNG'} | raw={raw_dump}")
     create_media_album(token, src_chat_id, src_msg_ids, caption)
     return token, build_bot_link(token)
 
 
 def store_single_token(msg: Message) -> tuple[str, str]:
     token = generate_numeric_token(16)
-    cap   = _get_caption(msg)
-    logger.info(f"store_single: msg={msg.id} caption={'có' if cap else 'TRỐNG'}")
-    create_media_album(token, msg.chat_id, [msg.id], cap)
+    create_media_album(token, msg.chat_id, [msg.id], _get_caption(msg))
     return token, build_bot_link(token)
 
 
