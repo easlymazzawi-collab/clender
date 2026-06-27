@@ -96,11 +96,99 @@ def store_single_token(msg: Message) -> tuple[str, str]:
     return token, build_bot_link(token)
 
 
-# ─── Edit caption helper ──────────────────────────────────────────────────────
+# ─── Send with caption (no re-upload, no Forwarded-from) ─────────────────────
 
-async def _edit_caption(client: TelegramClient, entity, msg_id: int, caption: str):
-    """Edit caption of a message. Silently ignore if not editable."""
+async def send_single_as_link(
+    client: TelegramClient,
+    msg: Message,
+    dst_entity,
+    dst_topic_id: int | None,
+    caption_template: str | None = None,
+) -> object:
+    """
+    Gửi 1 message sang đích với caption = caption gốc + bot link.
+    Dùng msg.media (file reference có sẵn) → không tải lại file.
+    Không hiện 'Forwarded from'.
+    """
+    orig_cap = _get_caption(msg)
+    token, url = store_single_token(msg)
+    full_cap   = _build_caption(orig_cap, url, caption_template)
+
+    kw = {}
+    if dst_topic_id and dst_topic_id != 1:
+        kw["reply_to"] = dst_topic_id
+
+    if not msg.media:
+        # Tin nhắn thuần text
+        return await client.send_message(
+            entity=dst_entity, message=full_cap[:4096], **kw
+        )
+
     try:
-        await client.edit_message(entity, msg_id, text=caption[:1024])
+        return await client.send_file(
+            entity=dst_entity,
+            file=msg.media,       # tái dùng file reference, không tải lại
+            caption=full_cap[:1024],
+            **kw,
+        )
     except Exception as e:
-        logger.debug(f"edit_caption id={msg_id}: {e}")
+        logger.warning(f"send_single_as_link id={msg.id}: {e}")
+        # Fallback: gửi text với link
+        return await client.send_message(
+            entity=dst_entity, message=full_cap[:4096], **kw
+        )
+
+
+async def send_album_as_links(
+    client: TelegramClient,
+    msgs: list,
+    dst_entity,
+    dst_topic_id: int | None,
+    caption_template: str | None = None,
+) -> list:
+    """
+    Gửi album sang đích với caption cuối = caption gốc + bot link.
+    Dùng list[msg.media] → gửi thành album, không tải lại file.
+    Không hiện 'Forwarded from'.
+    """
+    if not msgs:
+        return []
+
+    orig_cap = next((_get_caption(m) for m in msgs if _get_caption(m)), "")
+    token, url = store_album_token(msgs)
+    full_cap   = _build_caption(orig_cap, url, caption_template)
+
+    kw = {}
+    if dst_topic_id and dst_topic_id != 1:
+        kw["reply_to"] = dst_topic_id
+
+    # Lấy media objects từ các message trong album
+    media_list = [m.media for m in msgs if m.media]
+    if not media_list:
+        # Không có media → gửi text
+        return [await client.send_message(entity=dst_entity, message=full_cap[:4096], **kw)]
+
+    n = len(media_list)
+    # Caption: trống cho các item trừ item cuối
+    captions = [""] * (n - 1) + [full_cap[:1024]]
+
+    try:
+        result = await client.send_file(
+            entity=dst_entity,
+            file=media_list,
+            caption=captions,
+            **kw,
+        )
+        # send_file với list trả về list hoặc 1 message
+        if isinstance(result, list):
+            return result
+        return [result] if result else []
+    except Exception as e:
+        logger.warning(f"send_album_as_links ({len(media_list)} items): {e}")
+        # Fallback: gửi text với link
+        try:
+            s = await client.send_message(entity=dst_entity, message=full_cap[:4096], **kw)
+            return [s]
+        except Exception as e2:
+            logger.error(f"send_album_as_links fallback failed: {e2}")
+            return []
