@@ -29,9 +29,8 @@ from .state import (
     make_key, STATE_DIR,
 )
 from .link_sender import (
-    store_album_token, store_single_token,
-    _build_caption, _get_caption, _media_type_of,
-    edit_caption_safe,
+    _get_caption, _media_type_of,
+    send_preview_single, send_preview_album,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,43 +180,6 @@ class PermanentForwardError(Exception):
     def __init__(self, orig):
         self.orig = orig
         super().__init__(f"{type(orig).__name__}: {orig}")
-
-
-async def _forward_drop_author(client, msgs, src_peer, dst_peer, dst_topic_id,
-                               max_attempts=4) -> list[int]:
-    """
-    Forward messages với drop_author=True.
-    - Không hiện 'Forwarded from'
-    - Telethon user là author → có thể edit_message sau đó
-    Trả về list dest message IDs (sorted).
-    """
-    kw = {}
-    if dst_topic_id and dst_topic_id != 1:
-        kw["top_msg_id"] = dst_topic_id
-
-    for attempt in range(max_attempts):
-        try:
-            result = await client(ForwardMessagesRequest(
-                from_peer=src_peer, to_peer=dst_peer,
-                id=[m.id for m in msgs],
-                random_id=[
-                    int.from_bytes(os.urandom(8), "big") & 0x7FFFFFFFFFFFFFFF
-                    for _ in msgs
-                ],
-                drop_author=True,   # LUÔN drop_author trong link_mode
-                noforwards=False,
-                **kw,
-            ))
-            return sorted(_parse_new_ids_from_updates(result))
-        except FloodWaitError as e:
-            await asyncio.sleep(e.seconds + 2)
-        except Exception as e:
-            if is_permanent_error(e):
-                raise PermanentForwardError(e)
-            if attempt == max_attempts - 1:
-                raise
-            await asyncio.sleep(2 * (attempt + 1))
-    return []
 
 
 def _parse_new_ids_from_updates(result) -> list[int]:
@@ -696,34 +658,27 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         pending_album["gid"]  = None
         pending_album["msgs"] = []
 
-        # ── Link mode: forward(drop_author=True) → edit caption cuối = orig + link
+        # ── Link mode: gửi PREVIEW album (thumbnail video/ảnh) + caption + link ──
         if link_mode:
             flush_skip_log(first_id - 1)
             try:
-                # 1. Forward với drop_author=True → user là author → có thể edit
-                new_ids = await _forward_drop_author(
-                    client, album, src_peer, dst_peer, dst_topic_id
+                sent_list = await send_preview_album(
+                    client, album, dst_entity,
+                    dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
+                    caption_tpl,
                 )
-                # 2. Tạo token + caption
-                orig_cap = next((_get_caption(m) for m in album if _get_caption(m)), "")
-                token, url = store_album_token(album)
-                full_cap   = _build_caption(orig_cap, url, caption_tpl)
-                # 3. Edit caption của message cuối trong album
-                if new_ids:
-                    last_id = new_ids[-1]
-                    await edit_caption_safe(client, dst_entity, last_id, full_cap)
-                    for m, d in zip(album, new_ids):
-                        id_map[m.id] = d
-                count += n
-                stats["album"] += 1
-                stats["links_created"] = stats.get("links_created", 0) + 1
+                if sent_list:
+                    last_sent = sent_list[-1]
+                    for m in album:
+                        id_map[m.id] = last_sent.id
+                    count += n
+                    stats["album"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + 1
+                else:
+                    skipped += n; stats["skipped"] += n
                 last_id_buf = last_mid
                 save_last_id(topic_state_key, last_id_buf)
                 consecutive_errors = 0
-            except PermanentForwardError:
-                skipped += n; stats["skipped"] += n
-                last_id_buf = last_mid
-                save_last_id(topic_state_key, last_id_buf)
             except Exception as e:
                 stats["errors"] += 1
                 logger.warning(f"album link_mode ({first_id}→{last_mid}): {e}")
@@ -836,19 +791,17 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         if only_filter == "photo" and not msg.photo:
             _skip_media(); continue
 
-        # ── Link mode: forward(drop_author=True) → edit caption = orig + link ─────
+        # ── Link mode: gửi PREVIEW (thumbnail video/ảnh) + caption + link ────────
         if link_mode:
             try:
                 flush_skip_log(msg.id - 1)
-                new_ids = await _forward_drop_author(
-                    client, [msg], src_peer, dst_peer, dst_topic_id
+                sent = await send_preview_single(
+                    client, msg, dst_entity,
+                    dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
+                    caption_tpl,
                 )
-                if new_ids:
-                    orig_cap = _get_caption(msg)
-                    token, url = store_single_token(msg)
-                    full_cap  = _build_caption(orig_cap, url, caption_tpl)
-                    await edit_caption_safe(client, dst_entity, new_ids[0], full_cap)
-                    id_map[msg.id] = new_ids[0]
+                if sent:
+                    id_map[msg.id] = sent.id
                     count += 1; stats["normal"] += 1
                     stats["links_created"] = stats.get("links_created", 0) + 1
                 else:
@@ -861,7 +814,7 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                     progress_cb({"phase": "forward",
                                  "total_forwarded": count + stats.get("_base", 0),
                                  "links_created": stats.get("links_created", 0)})
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.2)
             except FloodWaitError as e:
                 stats["flood_wait"] = stats.get("flood_wait", 0) + 1
                 await asyncio.sleep(e.seconds + 2)
@@ -979,19 +932,16 @@ async def run_session(client: TelegramClient, cfg: dict,
         pending_album["dst_topic"] = None
 
         if link_mode:
-            # forward(drop_author=True) → edit caption cuối = orig + link
+            # Gửi PREVIEW album + caption + link
             try:
                 n = len(album)
-                new_ids = await _forward_drop_author(
-                    client, album, src_peer, dst_peer, dt
+                sent_list = await send_preview_album(
+                    client, album, dst_entity,
+                    dt if dt and dt != 1 else None, caption_tpl,
                 )
-                orig_cap = next((_get_caption(m) for m in album if _get_caption(m)), "")
-                token, url = store_album_token(album)
-                full_cap   = _build_caption(orig_cap, url, caption_tpl)
-                if new_ids:
-                    await edit_caption_safe(client, dst_entity, new_ids[-1], full_cap)
-                count += n; stats["album"] += 1
-                stats["links_created"] = stats.get("links_created", 0) + 1
+                if sent_list:
+                    count += n; stats["album"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + 1
                 last_id_buf = album[-1].id
             except Exception as e:
                 stats["errors"] += 1
@@ -1060,17 +1010,15 @@ async def run_session(client: TelegramClient, cfg: dict,
             if pending_album["msgs"]:
                 await flush_pending()
 
-            # ── Link mode: forward(drop_author) → edit caption ───────────────────
+            # ── Link mode: gửi PREVIEW + caption + link ──────────────────────────
             if link_mode and _media_type_of(msg):
-                new_ids = await _forward_drop_author(
-                    client, [msg], src_peer, dst_peer, dst_topic
+                sent = await send_preview_single(
+                    client, msg, dst_entity,
+                    dst_topic if dst_topic and dst_topic != 1 else None,
+                    caption_tpl,
                 )
-                if new_ids:
-                    orig_cap = _get_caption(msg)
-                    token, url = store_single_token(msg)
-                    full_cap  = _build_caption(orig_cap, url, caption_tpl)
-                    await edit_caption_safe(client, dst_entity, new_ids[0], full_cap)
-                    id_map[msg.id] = new_ids[0]
+                if sent:
+                    id_map[msg.id] = sent.id
                     count += 1; stats["normal"] += 1
                     stats["links_created"] = stats.get("links_created", 0) + 1
                 last_id_buf = msg.id
