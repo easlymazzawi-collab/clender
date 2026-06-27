@@ -904,10 +904,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _do_broadcast(ctx: ContextTypes.DEFAULT_TYPE, msg, admin):
-    """Phát nội dung msg tới tất cả user đã dùng bot (copy_message giữ định dạng)."""
-    user_ids = list_user_ids(only_active=True)
+    """
+    Phát nội dung msg tới tất cả NGƯỜI DÙNG đã dùng bot (copy_message giữ định dạng).
+    KHÔNG gửi cho admin (ADMIN_IDS).
+    """
+    user_ids = [uid for uid in list_user_ids(only_active=True)
+                if uid not in ADMIN_IDS]
     total    = len(user_ids)
-    notice = await msg.reply_text(f"📨 Đang gửi tới {total} người dùng…")
+    notice = await msg.reply_text(
+        f"📨 Đang gửi tới {total} người dùng (đã loại {len(ADMIN_IDS)} admin)…"
+    )
 
     sent = fail = 0
     for uid in user_ids:
