@@ -25,7 +25,7 @@ from typing import Optional
 from telethon import TelegramClient
 from telethon.tl.types import Message, DocumentAttributeFilename
 
-from utils.token import generate_token
+from utils.token import generate_numeric_token
 from database.models import create_media_album
 from config.settings import BOT_USERNAME, LINK_CAPTION_TEMPLATE
 
@@ -81,7 +81,7 @@ def _file_name_of(msg: Message) -> Optional[str]:
 # ─── DB token ─────────────────────────────────────────────────────────────────
 
 def store_album_token(msgs: list) -> tuple[str, str]:
-    token       = generate_token(16)
+    token       = generate_numeric_token(16)
     src_chat_id = msgs[0].chat_id
     src_msg_ids = [m.id for m in msgs]
     seen, caps  = set(), []
@@ -89,13 +89,17 @@ def store_album_token(msgs: list) -> tuple[str, str]:
         c = _get_caption(m)
         if c and c not in seen:
             seen.add(c); caps.append(c)
-    create_media_album(token, src_chat_id, src_msg_ids, "\n".join(caps))
+    caption = "\n".join(caps)
+    logger.info(f"store_album: msgs={src_msg_ids} caption={'có' if caption else 'TRỐNG'}")
+    create_media_album(token, src_chat_id, src_msg_ids, caption)
     return token, build_bot_link(token)
 
 
 def store_single_token(msg: Message) -> tuple[str, str]:
-    token = generate_token(16)
-    create_media_album(token, msg.chat_id, [msg.id], _get_caption(msg))
+    token = generate_numeric_token(16)
+    cap   = _get_caption(msg)
+    logger.info(f"store_single: msg={msg.id} caption={'có' if cap else 'TRỐNG'}")
+    create_media_album(token, msg.chat_id, [msg.id], cap)
     return token, build_bot_link(token)
 
 
