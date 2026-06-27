@@ -70,9 +70,14 @@ _telethon_error = ""
 
 
 def _init_telethon():
+    """
+    Validate Telethon config and session file.
+    Does NOT create TelegramClient here (would fail without asyncio loop).
+    The client is created lazily inside each worker thread when a session starts.
+    """
     global _telethon_ready, _telethon_error
     if not TELETHON_API_ID or not TELETHON_API_HASH:
-        _telethon_error = "TELETHON_API_ID / TELETHON_API_HASH not set"
+        _telethon_error = "TELETHON_API_ID / TELETHON_API_HASH chưa được set trong .env"
         return
 
     from forwarder.state import STATE_DIR as FWD_STATE_DIR
@@ -81,18 +86,16 @@ def _init_telethon():
 
     if not os.path.exists(session_file):
         _telethon_error = (
-            f"Session file not found: {session_file}\n"
-            "Run once to authenticate: python run.py --auth"
+            f"Session file chưa tồn tại: {session_file}\n"
+            "Chạy một lần để xác thực: python run.py --auth"
         )
         return
-    try:
-        client = _runner.init_client(TELETHON_API_ID, TELETHON_API_HASH,
-                                     TELETHON_SESSION, TELETHON_PHONE)
-        _telethon_ready = True
-        logger.info(f"Telethon client initialized: {session_file}")
-    except Exception as e:
-        _telethon_error = str(e)
-        logger.warning(f"Telethon init: {e}")
+
+    # Store config in runner (TelegramClient created in worker thread later)
+    _runner.init_client(TELETHON_API_ID, TELETHON_API_HASH,
+                        TELETHON_SESSION, TELETHON_PHONE)
+    _telethon_ready = True
+    logger.info(f"Telethon configured (session: {session_file})")
 
 
 # ─── Telegram Bot helper (for media serving) ──────────────────────────────────
