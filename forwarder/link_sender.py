@@ -131,14 +131,26 @@ async def _download_thumb(client: TelegramClient, msg: Message) -> Optional[byte
 
 # ─── Store album record ───────────────────────────────────────────────────────
 
+def _get_caption(msg) -> str:
+    """Extract caption/text from a Telethon message (handles all media types)."""
+    # msg.message = caption for media, text for text messages
+    return (getattr(msg, "message", None) or "").strip()
+
+
 def _make_album_token(msgs: list) -> tuple[str, str]:
     """Generate token and store album in DB. Returns (token, bot_link)."""
     token       = generate_token(16)
     src_chat_id = msgs[0].chat_id
     src_msg_ids = [m.id for m in msgs]
-    caption     = " ".join(
-        filter(None, [m.message for m in msgs if m.message])
-    ).strip()
+    # Collect original captions (deduplicated, preserve first occurrence)
+    seen = set()
+    captions = []
+    for m in msgs:
+        cap = _get_caption(m)
+        if cap and cap not in seen:
+            seen.add(cap)
+            captions.append(cap)
+    caption = "\n".join(captions)
     create_media_album(token, src_chat_id, src_msg_ids, caption)
     return token, build_bot_link(token)
 
@@ -188,7 +200,7 @@ async def send_as_link(
         return None
 
     token, url = _make_single_token(msg)
-    orig_cap   = (msg.message or "").strip()
+    orig_cap   = _get_caption(msg)
     full_cap   = _build_caption(orig_cap, url, caption_template)
     kw = dict(entity=dst_chat_id, reply_to=dst_topic_id)
 
@@ -261,7 +273,14 @@ async def send_album_as_links(
 
     # ONE token for the whole album
     token, url = _make_album_token(msgs)
-    orig_cap   = " ".join(filter(None, [m.message for m in msgs if m.message])).strip()
+    seen_caps = set()
+    orig_caps = []
+    for m in msgs:
+        cap = _get_caption(m)
+        if cap and cap not in seen_caps:
+            seen_caps.add(cap)
+            orig_caps.append(cap)
+    orig_cap = "\n".join(orig_caps)
     full_cap   = _build_caption(orig_cap, url, caption_template)
 
     kw = dict(entity=dst_chat_id, reply_to=dst_topic_id)

@@ -282,23 +282,48 @@ async def get_pinned_message_ids(client: TelegramClient, entity,
 
 
 async def pin_message(client: TelegramClient, entity, msg_id: int,
+                      chat_id: int = None,
                       silent: bool = True,
                       max_flood_wait: int = 30) -> bool:
     """
-    Pin msg_id in entity.
-    silent=True → no notification spam.
-    max_flood_wait: if FloodWait > this many seconds → skip (return False).
-    Returns True on success.
+    Pin msg_id in destination.
+
+    Strategy (in order):
+    1. Bot API (python-telegram-bot) — try first, usually no severe FloodWait.
+       Requires BOT_TOKEN and bot must be admin in the destination chat.
+    2. Telethon (user account) — fallback.
+       If FloodWait > max_flood_wait seconds → skip (don't wait).
+
+    chat_id: numeric ID of destination chat (needed for Bot API).
+             If None, skip Bot API and use Telethon only.
     """
     from telethon.tl.functions.messages import UpdatePinnedMessageRequest
     from telethon.errors import FloodWaitError
+    from config.settings import BOT_TOKEN
 
+    # ── 1. Try Bot API first ──────────────────────────────────────────────────
+    if BOT_TOKEN and chat_id:
+        try:
+            from telegram import Bot
+            bot = Bot(token=BOT_TOKEN)
+            await bot.pin_chat_message(
+                chat_id=chat_id,
+                message_id=msg_id,
+                disable_notification=silent,
+            )
+            logger.info(f"pin_message id={msg_id} via Bot API ✅")
+            return True
+        except Exception as e:
+            logger.warning(f"pin_message id={msg_id} Bot API failed: {e} — trying Telethon")
+
+    # ── 2. Telethon fallback ──────────────────────────────────────────────────
     for attempt in range(2):
         try:
             await client(UpdatePinnedMessageRequest(
                 peer=entity, id=msg_id,
                 silent=silent, unpin=False, pm_oneside=False,
             ))
+            logger.info(f"pin_message id={msg_id} via Telethon ✅")
             return True
         except FloodWaitError as e:
             if e.seconds > max_flood_wait:
@@ -310,7 +335,7 @@ async def pin_message(client: TelegramClient, entity, msg_id: int,
             logger.info(f"pin_message id={msg_id}: FloodWait {e.seconds}s, waiting…")
             await asyncio.sleep(e.seconds + 1)
         except Exception as e:
-            logger.warning(f"pin_message id={msg_id}: {e}")
+            logger.warning(f"pin_message id={msg_id} Telethon: {e}")
             return False
     return False
 
@@ -329,13 +354,19 @@ async def clone_pinned_messages(client: TelegramClient,
     if not pinned_src_ids:
         return 0
 
+    # Get numeric chat_id for Bot API pinning
+    dst_chat_id = getattr(dst_entity, "id", None)
+    if dst_chat_id and dst_chat_id > 0:
+        dst_chat_id = -dst_chat_id   # channels/supergroups are negative
+
     pinned = 0
     # Pin in REVERSE order so the "first" pinned message in source
     # ends up on top in destination (Telegram stacks pins newest-first)
     for src_id in reversed(pinned_src_ids):
         dst_id = id_map.get(src_id)
         if dst_id:
-            ok = await pin_message(client, dst_entity, dst_id)
+            ok = await pin_message(client, dst_entity, dst_id,
+                                   chat_id=dst_chat_id)
             if ok:
                 pinned += 1
                 logger.info(f"Pinned dst={dst_id} (src={src_id})")
