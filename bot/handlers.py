@@ -33,6 +33,7 @@ from database.models import (
     get_media_album, list_media_albums, get_conn,
     create_album_from_file_ids,
     record_user, list_user_ids, count_users, mark_user_blocked,
+    update_album_settings, get_album_settings,
 )
 from utils.token import generate_numeric_token
 
@@ -131,6 +132,39 @@ def build_share_url(token: str) -> str:
     return f"{BASE_URL}/media/{token}"
 
 
+# ── Menu cấu hình link (hết hạn / giới hạn xem / cho forward) ────────────────
+
+def _fmt_expiry(expires_at) -> str:
+    if not expires_at:
+        return "Vĩnh viễn"
+    import datetime as _dt
+    left = expires_at - time.time()
+    if left <= 0:
+        return "Đã hết hạn"
+    h = int(left // 3600)
+    if h >= 24:
+        return f"{h // 24}d {h % 24}h"
+    if h >= 1:
+        return f"{h}h"
+    return f"{int(left // 60)}m"
+
+
+def _link_config_kb(token: str) -> InlineKeyboardMarkup:
+    """Menu nút bấm cấu hình link."""
+    s = get_album_settings(token) or {}
+    exp_label = _fmt_expiry(s.get("expires_at"))
+    mv        = s.get("max_views") or 0
+    mv_label  = "Không" if mv == 0 else str(mv)
+    fwd       = s.get("allow_forward", 1)
+    fwd_label = "✅ Có" if fwd else "🚫 Không"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"⏱ Hết hạn: {exp_label}", callback_data=f"cfg:{token}:exp_menu")],
+        [InlineKeyboardButton(f"👁 Giới hạn xem: {mv_label}", callback_data=f"cfg:{token}:view_menu")],
+        [InlineKeyboardButton(f"↪️ Cho forward: {fwd_label}", callback_data=f"cfg:{token}:fwd_toggle")],
+        [InlineKeyboardButton("✅ Xong", callback_data=f"cfg:{token}:done")],
+    ])
+
+
 def _caption_with_link(orig_cap: str, url: str) -> str:
     tpl = LINK_CAPTION_TEMPLATE.replace("\\n", "\n")
     link_line = tpl.format(url=url)
@@ -225,10 +259,24 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
         album = get_media_album(token)
-        if album:
-            await _serve_album(update, ctx, album)
+        if not album:
+            await update.message.reply_text("❌ Link không hợp lệ hoặc đã hết hạn.")
             return
-        await update.message.reply_text("❌ Link không hợp lệ hoặc đã hết hạn.")
+
+        # Kiểm tra hết hạn
+        exp = album.get("expires_at")
+        if exp and time.time() > exp:
+            await update.message.reply_text("⏱ Link này đã hết hạn.")
+            return
+        # Kiểm tra giới hạn lượt xem (access_count đã được tăng trong get_media_album)
+        mv = album.get("max_views") or 0
+        if mv > 0 and album.get("access_count", 0) > mv:
+            await update.message.reply_text(
+                f"👁 Link đã đạt giới hạn {mv} lượt xem."
+            )
+            return
+
+        await _serve_album(update, ctx, album)
         return
 
     if not await gate(update, ctx):
@@ -274,6 +322,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
     src_chat_id = album["src_chat_id"]
     src_msg_ids = album["src_msg_ids"]
     file_ids    = album.get("file_ids") or []
+    protect     = not album.get("allow_forward", 1)   # chặn forward nếu tắt
 
     # ── Trường hợp media nhận trực tiếp qua bot → gửi lại bằng file_id ────────
     if file_ids:
@@ -304,12 +353,13 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
                 }
                 fn = send_map.get(m.get("type"), ctx.bot.send_document)
                 kw = {"caption": cap} if cap else {}
-                # tên tham số khác nhau theo loại
                 key = {"photo":"photo","video":"video","animation":"animation",
                        "audio":"audio","voice":"voice"}.get(m.get("type"),"document")
-                await fn(chat_id=chat_id, **{key: m.get("file_id")}, **kw)
+                await fn(chat_id=chat_id, **{key: m.get("file_id")},
+                         protect_content=protect, **kw)
             else:
-                await ctx.bot.send_media_group(chat_id=chat_id, media=media_group)
+                await ctx.bot.send_media_group(chat_id=chat_id, media=media_group,
+                                               protect_content=protect)
             logger.info(f"serve_album OK via file_ids ({len(file_ids)})")
             return
         except Exception as e:
@@ -328,6 +378,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
             chat_id=chat_id,
             from_chat_id=src_chat_id,
             message_ids=src_msg_ids,
+            protect_content=protect,
         )
         if result:
             logger.info(f"serve_album OK via copy_messages ({n} msgs)")
@@ -353,7 +404,8 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
     for mid in src_msg_ids:
         try:
             await ctx.bot.copy_message(
-                chat_id=chat_id, from_chat_id=src_chat_id, message_id=mid
+                chat_id=chat_id, from_chat_id=src_chat_id, message_id=mid,
+                protect_content=protect,
             )
             sent += 1
             await asyncio.sleep(0.2)
@@ -856,6 +908,13 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(full_cap[:4096], disable_web_page_preview=False)
 
+    # Menu cấu hình link (hết hạn / giới hạn xem / forward)
+    await msg.reply_text(
+        "⚙️ *Tuỳ chỉnh link* (tuỳ chọn):",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_link_config_kb(token),
+    )
+
 
 async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
     """Sau khi gom đủ album → tạo 1 token (lưu message_ids) + trả 1 link."""
@@ -895,6 +954,16 @@ async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
     except Exception as e:
         logger.warning(f"_flush_album reply: {e}")
         await msg.reply_text(full_cap[:4096])
+
+    # Menu cấu hình link
+    try:
+        await msg.reply_text(
+            "⚙️ *Tuỳ chỉnh link* (tuỳ chọn):",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=_link_config_kb(token),
+        )
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1020,6 +1089,85 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("🚫 Không có quyền.", show_alert=True)
             return
         await _handle_panel(q, ctx, data[len("panel:"):])
+        return
+
+    # ── Link config callbacks (cfg:TOKEN:action[:value]) ────────────────────────
+    if data.startswith("cfg:"):
+        if not is_admin(user.id):
+            await q.answer("🚫 Không có quyền.", show_alert=True)
+            return
+        await _handle_link_config(q, data[len("cfg:"):])
+        return
+
+
+async def _handle_link_config(q, rest: str):
+    """Xử lý menu cấu hình link: rest = 'TOKEN:action[:value]'."""
+    parts  = rest.split(":")
+    token  = parts[0]
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "done":
+        s = get_album_settings(token) or {}
+        await q.message.edit_text(
+            "✅ *Đã lưu cấu hình link!*\n\n"
+            f"⏱ Hết hạn: {_fmt_expiry(s.get('expires_at'))}\n"
+            f"👁 Giới hạn xem: {s.get('max_views') or 'Không'}\n"
+            f"↪️ Cho forward: {'Có' if s.get('allow_forward',1) else 'Không'}\n\n"
+            f"🔗 {build_share_url(token)}",
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+        )
+        return
+
+    if action == "exp_menu":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Vĩnh viễn", callback_data=f"cfg:{token}:exp:0"),
+             InlineKeyboardButton("1 giờ",     callback_data=f"cfg:{token}:exp:1")],
+            [InlineKeyboardButton("6 giờ",      callback_data=f"cfg:{token}:exp:6"),
+             InlineKeyboardButton("24 giờ",     callback_data=f"cfg:{token}:exp:24")],
+            [InlineKeyboardButton("3 ngày",     callback_data=f"cfg:{token}:exp:72"),
+             InlineKeyboardButton("7 ngày",     callback_data=f"cfg:{token}:exp:168")],
+            [InlineKeyboardButton("◀️ Quay lại", callback_data=f"cfg:{token}:back")],
+        ])
+        await q.message.edit_reply_markup(reply_markup=kb)
+        return
+
+    if action == "exp":
+        hours = int(parts[2])
+        exp = 0 if hours == 0 else (time.time() + hours * 3600)
+        update_album_settings(token, expires_at=exp)
+        await q.answer("✅ Đã đặt hết hạn")
+        await q.message.edit_reply_markup(reply_markup=_link_config_kb(token))
+        return
+
+    if action == "view_menu":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Không giới hạn", callback_data=f"cfg:{token}:view:0")],
+            [InlineKeyboardButton("10",  callback_data=f"cfg:{token}:view:10"),
+             InlineKeyboardButton("50",  callback_data=f"cfg:{token}:view:50"),
+             InlineKeyboardButton("100", callback_data=f"cfg:{token}:view:100")],
+            [InlineKeyboardButton("500", callback_data=f"cfg:{token}:view:500"),
+             InlineKeyboardButton("1000",callback_data=f"cfg:{token}:view:1000")],
+            [InlineKeyboardButton("◀️ Quay lại", callback_data=f"cfg:{token}:back")],
+        ])
+        await q.message.edit_reply_markup(reply_markup=kb)
+        return
+
+    if action == "view":
+        update_album_settings(token, max_views=int(parts[2]))
+        await q.answer("✅ Đã đặt giới hạn xem")
+        await q.message.edit_reply_markup(reply_markup=_link_config_kb(token))
+        return
+
+    if action == "fwd_toggle":
+        s = get_album_settings(token) or {}
+        update_album_settings(token, allow_forward=not s.get("allow_forward", 1))
+        await q.answer("✅ Đã đổi")
+        await q.message.edit_reply_markup(reply_markup=_link_config_kb(token))
+        return
+
+    if action == "back":
+        await q.message.edit_reply_markup(reply_markup=_link_config_kb(token))
         return
 
 

@@ -86,6 +86,9 @@ def init_db() -> None:
             caption      TEXT,               -- original caption of the album
             thumb_file_id TEXT,              -- file_id of thumbnail for the destination post
             file_ids     TEXT,               -- JSON [{type,file_id}] cho media nhận trực tiếp qua bot
+            expires_at   REAL,               -- timestamp hết hạn (NULL = vĩnh viễn)
+            max_views    INTEGER DEFAULT 0,  -- giới hạn lượt xem (0 = không giới hạn)
+            allow_forward INTEGER DEFAULT 1, -- 1 = cho forward, 0 = chặn (protect_content)
             created_at   DATETIME DEFAULT (datetime('now')),
             access_count INTEGER  DEFAULT 0,
             is_active    INTEGER  DEFAULT 1
@@ -106,13 +109,19 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_fwd_source   ON forward_log(source_chat_id, source_msg_id);
     """)
 
-    # Migration: thêm cột file_ids nếu DB cũ chưa có
+    # Migration: thêm cột mới nếu DB cũ chưa có
     cols = [r[1] for r in cur.execute("PRAGMA table_info(media_albums)").fetchall()]
-    if "file_ids" not in cols:
-        try:
-            cur.execute("ALTER TABLE media_albums ADD COLUMN file_ids TEXT")
-        except Exception:
-            pass
+    for col, ddl in [
+        ("file_ids",      "ALTER TABLE media_albums ADD COLUMN file_ids TEXT"),
+        ("expires_at",    "ALTER TABLE media_albums ADD COLUMN expires_at REAL"),
+        ("max_views",     "ALTER TABLE media_albums ADD COLUMN max_views INTEGER DEFAULT 0"),
+        ("allow_forward", "ALTER TABLE media_albums ADD COLUMN allow_forward INTEGER DEFAULT 1"),
+    ]:
+        if col not in cols:
+            try:
+                cur.execute(ddl)
+            except Exception:
+                pass
 
     conn.commit()
     conn.close()
@@ -341,6 +350,36 @@ def get_media_album(token: str) -> dict | None:
     except Exception:
         d["file_ids"] = []
     return d
+
+
+def update_album_settings(token: str, expires_at=None, max_views=None,
+                          allow_forward=None) -> None:
+    """Cập nhật cài đặt link (chỉ field nào truyền vào, None = giữ nguyên)."""
+    sets, vals = [], []
+    if expires_at is not None:
+        sets.append("expires_at=?");    vals.append(expires_at if expires_at else None)
+    if max_views is not None:
+        sets.append("max_views=?");     vals.append(int(max_views))
+    if allow_forward is not None:
+        sets.append("allow_forward=?"); vals.append(1 if allow_forward else 0)
+    if not sets:
+        return
+    vals.append(token)
+    conn = get_conn()
+    conn.execute(f"UPDATE media_albums SET {','.join(sets)} WHERE token=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def get_album_settings(token: str) -> dict | None:
+    """Lấy nhanh settings của album (không tăng access_count)."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT expires_at, max_views, allow_forward, access_count "
+        "FROM media_albums WHERE token=?", (token,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def list_media_albums(limit: int = 50, offset: int = 0) -> list[dict]:
