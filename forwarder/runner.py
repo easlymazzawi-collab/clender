@@ -43,7 +43,9 @@ class ForwarderRunner:
                     phone: str | None = None) -> TelegramClient:
         """Create (or return existing) Telethon client and ensure it's connected."""
         if self._client is None:
-            session_path = os.path.join(STATE_DIR, session_name)
+            # Import STATE_DIR from state module to get the resolved absolute path
+            from .state import STATE_DIR as _state_dir
+            session_path = os.path.join(_state_dir, session_name)
             self._client = TelegramClient(session_path, api_id, api_hash)
         return self._client
 

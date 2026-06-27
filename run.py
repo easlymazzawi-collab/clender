@@ -38,8 +38,8 @@ def run_bot():
 
 def run_auth():
     import asyncio
-    from forwarder.auth import main
-    asyncio.run(main())
+    import forwarder.auth as _auth_module
+    asyncio.run(_auth_module.main())
 
 
 def main():

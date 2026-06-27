@@ -28,6 +28,9 @@ TOPIC_MAP_FILE      = "topicmap_v25"
 SESSION_META_PREFIX = "session_meta_v25_"
 
 STATE_DIR = os.getenv("FWD_STATE_DIR", "forwarder_state")
+# Always use an absolute path so the directory is found regardless of
+# the working directory the process was launched from.
+STATE_DIR = os.path.abspath(STATE_DIR)
 os.makedirs(STATE_DIR, exist_ok=True)
 
 

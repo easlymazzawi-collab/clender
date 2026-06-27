@@ -74,15 +74,22 @@ def _init_telethon():
     if not TELETHON_API_ID or not TELETHON_API_HASH:
         _telethon_error = "TELETHON_API_ID / TELETHON_API_HASH not set"
         return
-    session_path = os.path.join("forwarder_state", TELETHON_SESSION)
-    if not os.path.exists(session_path + ".session"):
-        _telethon_error = f"Session file not found: {session_path}.session — run: python3 forwarder/auth.py"
+
+    from forwarder.state import STATE_DIR as FWD_STATE_DIR
+    session_path = os.path.join(FWD_STATE_DIR, TELETHON_SESSION)
+    session_file = session_path + ".session"
+
+    if not os.path.exists(session_file):
+        _telethon_error = (
+            f"Session file not found: {session_file}\n"
+            "Run once to authenticate: python run.py --auth"
+        )
         return
     try:
         client = _runner.init_client(TELETHON_API_ID, TELETHON_API_HASH,
                                      TELETHON_SESSION, TELETHON_PHONE)
         _telethon_ready = True
-        logger.info("Telethon client initialized (session file found)")
+        logger.info(f"Telethon client initialized: {session_file}")
     except Exception as e:
         _telethon_error = str(e)
         logger.warning(f"Telethon init: {e}")
