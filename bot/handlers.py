@@ -195,6 +195,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mode_label = {"all": "Tất cả", "admin": "Chỉ Admin",
                   "whitelist": "Danh sách"}.get(_upload_mode(), _upload_mode())
 
+    kb = None
+    if _is_public_url(BASE_URL):
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)]])
     await update.message.reply_text(
         f"👋 Xin chào *{user.first_name}*!\n\n"
         "🤖 *Forum Converter Bot*\n\n"
@@ -204,9 +207,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• /help — xem toàn bộ lệnh\n\n"
         f"🔒 Quyền upload: `{mode_label}`",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)
-        ]])
+        reply_markup=kb,
     )
 
 
@@ -844,16 +845,28 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ADMIN PANEL — giao diện nút bấm
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _is_public_url(url: str) -> bool:
+    """Telegram không chấp nhận localhost/IP nội bộ trong inline button URL."""
+    u = (url or "").lower()
+    if not u.startswith(("http://", "https://")):
+        return False
+    bad = ("localhost", "127.0.0.1", "0.0.0.0", "10.", "192.168.", "://[")
+    return not any(b in u for b in bad)
+
+
 def _panel_main_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("📊 Thống kê", callback_data="panel:stats"),
          InlineKeyboardButton("🔗 Link gần đây", callback_data="panel:links")],
         [InlineKeyboardButton("🔒 Quyền Upload", callback_data="panel:upload"),
          InlineKeyboardButton("📢 Force-Join", callback_data="panel:forcejoin")],
         [InlineKeyboardButton("👥 Whitelist", callback_data="panel:whitelist"),
          InlineKeyboardButton("⚙️ Cài đặt khác", callback_data="panel:settings")],
-        [InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)],
-    ])
+    ]
+    # Chỉ thêm nút Web Admin nếu BASE_URL là URL công khai hợp lệ
+    if _is_public_url(BASE_URL):
+        rows.append([InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)])
+    return InlineKeyboardMarkup(rows)
 
 
 def _panel_back_kb() -> InlineKeyboardMarkup:

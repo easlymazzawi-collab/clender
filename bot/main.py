@@ -68,6 +68,11 @@ def build_app():
     # ── Inline keyboard callbacks ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(handle_callback))
 
+    # ── Global error handler ───────────────────────────────────────────────────
+    async def on_error(update, context):
+        logger.error(f"Bot error: {context.error}", exc_info=context.error)
+    app.add_error_handler(on_error)
+
     return app
 
 
