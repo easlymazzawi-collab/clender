@@ -38,6 +38,9 @@ from utils.token import generate_numeric_token
 
 # Admin đang chờ nhập nội dung broadcast: {admin_id: True}
 _broadcast_pending: set = set()
+
+# Chống spam bấm link: {user_id: [timestamps]}
+_serve_times: dict = defaultdict(list)
 from bot.membership import gate, invalidate as invalidate_membership_cache
 
 logger = logging.getLogger(__name__)
@@ -97,6 +100,25 @@ def _max_mb() -> int:
 def _show_thumbnail() -> bool:
     """Mặc định TẮT — bot chỉ trả link. Bật qua /panel hoặc /set show_thumbnail 1."""
     return get_setting("show_thumbnail", "0") == "1"
+
+
+def _check_serve_rate(user_id: int) -> tuple[bool, int]:
+    """
+    Chống spam bấm link. Giới hạn số lần serve / phút mỗi user.
+    Setting: serve_per_min (mặc định 15, 0 = không giới hạn).
+    Trả về (cho_phép, giây_chờ).
+    """
+    limit = int(get_setting("serve_per_min", "15") or 15)
+    if limit <= 0:
+        return True, 0
+    now   = time.time()
+    times = [t for t in _serve_times[user_id] if now - t < 60]
+    _serve_times[user_id] = times
+    if len(times) >= limit:
+        wait = int(60 - (now - times[0])) + 1
+        return False, wait
+    _serve_times[user_id].append(now)
+    return True, 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,6 +213,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ctx.args:
         token = ctx.args[0].strip()
         if not await gate(update, ctx):
+            return
+        # Chống spam bấm link
+        ok, wait = _check_serve_rate(user.id)
+        if not ok:
+            await update.message.reply_text(
+                f"⏳ Bạn đang bấm quá nhanh! Vui lòng chờ {wait} giây rồi thử lại."
+            )
             return
         album = get_media_album(token)
         if album:
@@ -1092,11 +1121,13 @@ async def _handle_panel(q, ctx, action: str):
             "⚙️ *CÀI ĐẶT KHÁC*\n\n"
             f"🖼️ Hiện thumbnail khi trả link: `{'BẬT' if thumb_on else 'TẮT'}`\n"
             f"📏 Max file: `{_max_mb()} MB`\n"
-            f"⏱️ Rate limit: `{get_setting('rate_limit','20')}/giờ`\n\n"
+            f"⏱️ Giới hạn upload: `{get_setting('rate_limit','20')}/giờ`\n"
+            f"🛡️ Chống spam bấm link: `{get_setting('serve_per_min','15')}/phút`\n\n"
             "Bấm nút để bật/tắt thumbnail.\n"
-            "Hoặc đổi bằng lệnh:\n"
+            "Đổi giới hạn bằng lệnh:\n"
             "`/set max_file_mb 50`\n"
-            "`/set rate_limit 20`",
+            "`/set rate_limit 20`\n"
+            "`/set serve_per_min 15`  (0 = tắt chống spam)",
             parse_mode=ParseMode.MARKDOWN, reply_markup=kb
         )
         return
