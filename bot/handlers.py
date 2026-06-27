@@ -373,18 +373,33 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
         return
 
     # ── Thử 1: copy_messages (batch, không có 'Forwarded from') ──────────────
-    try:
-        result = await ctx.bot.copy_messages(
-            chat_id=chat_id,
-            from_chat_id=src_chat_id,
-            message_ids=src_msg_ids,
-            protect_content=protect,
-        )
-        if result:
-            logger.info(f"serve_album OK via copy_messages ({n} msgs)")
-            return
-    except Exception as e:
-        logger.warning(f"copy_messages from {src_chat_id}: {type(e).__name__}: {e}")
+    from telegram.error import RetryAfter
+    for attempt in range(3):
+        try:
+            result = await ctx.bot.copy_messages(
+                chat_id=chat_id,
+                from_chat_id=src_chat_id,
+                message_ids=src_msg_ids,
+                protect_content=protect,
+            )
+            if result:
+                logger.info(f"serve_album OK via copy_messages ({n} msgs)")
+                return
+            break
+        except RetryAfter as e:
+            wait = int(getattr(e, "retry_after", 3)) + 1
+            logger.warning(f"copy_messages FloodWait {wait}s (lần {attempt+1}/3)")
+            if attempt == 0:
+                try:
+                    await reply_to.reply_text(
+                        f"⏳ Bot đang bận, chờ {wait}s rồi gửi…"
+                    )
+                except Exception:
+                    pass
+            await asyncio.sleep(wait)
+        except Exception as e:
+            logger.warning(f"copy_messages from {src_chat_id}: {type(e).__name__}: {e}")
+            break
 
     # ── Thử 2: forward_messages (batch, có 'Forwarded from') ─────────────────
     try:
