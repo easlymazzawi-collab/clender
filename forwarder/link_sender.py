@@ -267,8 +267,11 @@ async def send_album_as_links(
     kw = dict(entity=dst_chat_id, reply_to=dst_topic_id)
 
     # Build list of visual bytes (photos / video thumbnails)
-    visual_bytes   = []   # list of bytes objects
-    text_only_info = []   # types that can't be in media group (doc/audio)
+    # text_only_info: ONLY for non-visual items (doc/audio) — NOT for failed downloads.
+    # When photo/video download fails, the main caption link already covers the album.
+    # Adding the URL again per failed item causes URL spam (N copies of same link).
+    visual_bytes   = []   # list of bytes objects to send as media group
+    text_only_info = []   # non-visual items only (document, audio, voice)
 
     for msg in msgs:
         ftype = _media_type_of(msg)
@@ -276,37 +279,28 @@ async def send_album_as_links(
             continue
 
         if ftype == "photo":
-            try:
-                data = await _dl(client, msg)
-                if data:
-                    visual_bytes.append(data)
-                    continue
-            except Exception as e:
-                logger.warning(f"download photo id={msg.id}: {e}")
-            text_only_info.append(f"🖼️ {url}")
+            data = await _dl(client, msg)
+            if data:
+                visual_bytes.append(data)
+            # If download fails → skip (link in caption covers it, no URL spam)
 
         elif ftype in ("video", "animation", "video_note"):
-            try:
-                data = await _download_thumb(client, msg)
-                if data:
-                    visual_bytes.append(data)
-                    continue
-            except Exception as e:
-                logger.warning(f"download thumb id={msg.id}: {e}")
-            # No thumbnail — will be in caption text
-            text_only_info.append(f"🎬 {url}")
+            data = await _download_thumb(client, msg)
+            if data:
+                visual_bytes.append(data)
+            # If no thumbnail → skip (link in caption covers it)
 
         else:
-            # Document / audio → add info to caption, not visual
+            # Document / audio / voice / sticker → can't be in media group
             fname = _file_name_of(msg) or ftype
-            text_only_info.append(f"{_emoji_for_type(ftype)} **{fname}**")
+            text_only_info.append(f"{_emoji_for_type(ftype)} {fname}")
 
     sent_msgs = []
 
-    # Build final caption: link + any non-visual items
+    # Caption = original caption + share link (+ doc/audio names if any)
     extra = "\n".join(text_only_info)
     if extra:
-        final_cap = f"{full_cap}\n{extra}"
+        final_cap = f"{full_cap}\n📎 {extra}"
     else:
         final_cap = full_cap
     final_cap = final_cap[:1024]
