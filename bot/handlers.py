@@ -429,13 +429,15 @@ async def cmd_share(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Không thể tạo link.")
         return
 
-    url = build_share_url(token)
-    caption = LINK_CAPTION_TEMPLATE.format(url=url)
+    url      = build_share_url(token)
+    orig_cap = (target.caption or target.text or "").strip()
+    tpl      = LINK_CAPTION_TEMPLATE.replace("\\n", "\n")
+    link_line = tpl.format(url=url)
+    full_cap  = f"{orig_cap}\n\n{link_line}" if orig_cap else link_line
     await update.message.reply_text(
-        f"✅ *Link đã tạo!*\n\n{caption}\n\n🔑 Token: `{token}`",
-        parse_mode=ParseMode.MARKDOWN,
+        full_cap[:4096],
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔗 Mở link", url=url)
+            InlineKeyboardButton("🔗 Nhấp để xem", url=url)
         ]])
     )
 
@@ -823,19 +825,32 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     url          = build_share_url(token)
     caption_text = LINK_CAPTION_TEMPLATE.format(url=url)
 
+    # Reply với format giống post ở forum đích:
+    # [caption gốc nếu có] + link — không hiện token, không hiện "✅ Đã tạo link"
+    orig_cap = (msg.caption or msg.text or "").strip()
+    if orig_cap:
+        full_cap = f"{orig_cap}\n\n{caption_text}"
+    else:
+        full_cap = caption_text
+
     if fi["file_type"] in ("video", "video_note", "animation") and fi.get("thumb_file_id"):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Xem video", url=url)]])
         await msg.reply_photo(
             photo=fi["thumb_file_id"],
-            caption=f"🎬 *{fi.get('file_name') or 'Video'}*\n\n{caption_text}",
-            parse_mode=ParseMode.MARKDOWN,
+            caption=full_cap[:1024],
+            reply_markup=kb
+        )
+    elif fi["file_type"] == "photo":
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Nhấp để xem", url=url)]])
+        await msg.reply_photo(
+            photo=fi["file_id"],
+            caption=full_cap[:1024],
             reply_markup=kb
         )
     else:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Mở link", url=url)]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Nhấp để xem", url=url)]])
         await msg.reply_text(
-            f"✅ *Đã tạo link!*\n\n{caption_text}\n\n🔑 Token: `{token}`",
-            parse_mode=ParseMode.MARKDOWN,
+            full_cap[:4096],
             reply_markup=kb
         )
 
