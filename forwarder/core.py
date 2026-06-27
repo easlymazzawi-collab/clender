@@ -573,6 +573,11 @@ async def forward_topic_messages(client, src_entity, dst_entity,
     last_id         = load_last_id(topic_state_key)
     min_id          = last_id if last_id else 0
 
+    # Nếu link chỉ định message bắt đầu → dùng làm sàn min_id (bỏ msg cũ hơn)
+    start_floor = cfg.get("backup_start_id")
+    if start_floor:
+        min_id = max(min_id, start_floor - 1)
+
     count              = 0
     skipped            = 0
     last_id_buf        = last_id or 0
@@ -1145,7 +1150,17 @@ async def run_forum_backup(client: TelegramClient, cfg: dict,
     total_skipped   = 0
     per_topic_count = {}
     sorted_src_ids  = sorted(src_topics.keys())
-    total_topics    = len(sorted_src_ids)
+
+    # Nếu link trỏ 1 topic cụ thể → chỉ clone topic đó
+    only_topic = cfg.get("only_topic_id")
+    if only_topic:
+        if only_topic in src_topics:
+            sorted_src_ids = [only_topic]
+            logger.info(f"Backup CHỈ topic {only_topic}: '{src_topics[only_topic]['title']}'")
+        else:
+            logger.warning(f"Topic {only_topic} không tìm thấy trong nguồn — clone tất cả")
+
+    total_topics = len(sorted_src_ids)
 
     for idx, src_id in enumerate(sorted_src_ids, 1):
         if stop_event and stop_event.is_set():

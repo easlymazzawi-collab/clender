@@ -296,6 +296,10 @@ def forwarder_start():
         cfg["emoji_raw"]    = f.get("emoji_raw", "").strip()
         cfg["skip_general"] = f.get("skip_general") == "on"
         cfg["clone_pins"]   = f.get("clone_pins") == "on"
+        # Nếu link nguồn trỏ tới 1 topic cụ thể → chỉ clone topic đó,
+        # bắt đầu từ message trong link (nếu có).
+        cfg["only_topic_id"]   = src_parsed.get("topic_id")
+        cfg["backup_start_id"] = src_parsed.get("message_id")
     else:
         # Forward mode: lấy start_msg_id / topic từ link nguồn nếu có,
         # ưu tiên giá trị nhập tay trong form
