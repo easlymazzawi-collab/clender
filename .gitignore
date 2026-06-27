@@ -25,7 +25,5 @@ media/
 .vscode/
 .idea/
 *.swp
-forwarder_state/*.session
-forwarder_state/*.json
-forwarder_state/*.txt
 forwarder_state/
+backups/

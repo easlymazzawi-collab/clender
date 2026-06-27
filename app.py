@@ -125,6 +125,12 @@ with app.app_context():
     init_db()
     sync_file_sessions_to_db()
     _init_telethon()
+    # Auto-backup hàng ngày (chạy nền)
+    try:
+        from utils.backup import start_backup_scheduler
+        start_backup_scheduler()
+    except Exception as _e:
+        logger.warning(f"backup scheduler: {_e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
