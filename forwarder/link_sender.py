@@ -90,7 +90,9 @@ def store_album_token(msgs: list) -> tuple[str, str]:
         if c and c not in seen:
             seen.add(c); caps.append(c)
     caption = "\n".join(caps)
-    logger.info(f"store_album: msgs={src_msg_ids} caption={'có' if caption else 'TRỐNG'}")
+    # Debug: dump raw .message của từng item để xác định source có caption không
+    raw_dump = [(m.id, (getattr(m, "message", None) or "")[:30]) for m in msgs]
+    logger.info(f"store_album: caption={'có' if caption else 'TRỐNG'} | raw={raw_dump}")
     create_media_album(token, src_chat_id, src_msg_ids, caption)
     return token, build_bot_link(token)
 
