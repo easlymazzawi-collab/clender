@@ -231,20 +231,28 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await gate(update, ctx):
         return
 
-    mode_label = {"all": "Tất cả", "admin": "Chỉ Admin",
-                  "whitelist": "Danh sách"}.get(_upload_mode(), _upload_mode())
+    # Member: chào mừng tối giản
+    if not is_admin(user.id):
+        await update.message.reply_text(
+            f"👋 Xin chào *{user.first_name}*!\n\n"
+            "🤖 Đây là bot chia sẻ media.\n"
+            "👀 Bấm vào link chia sẻ để xem nội dung — bot sẽ gửi về cho bạn.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
 
+    # Admin: đầy đủ
     kb = None
     if _is_public_url(BASE_URL):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)]])
     await update.message.reply_text(
-        f"👋 Xin chào *{user.first_name}*!\n\n"
+        f"👋 Xin chào *{user.first_name}* (Admin)!\n\n"
         "🤖 *Forum Converter Bot*\n\n"
         "📌 *Cách dùng:*\n"
-        "• Gửi ảnh/video/file → bot tạo link chia sẻ\n"
-        "• Click link → bot gửi media gốc về\n"
-        "• /help — xem toàn bộ lệnh\n\n"
-        f"🔒 Quyền upload: `{mode_label}`",
+        "• Gửi media → tạo link chia sẻ\n"
+        "• /panel — bảng điều khiển\n"
+        "• /help — toàn bộ lệnh\n\n"
+        f"🔒 Quyền upload: `{_upload_mode()}`",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
     )
@@ -380,26 +388,30 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await gate(update, ctx):
         return
-    admin_txt = ""
-    if is_admin(update.effective_user.id):
-        admin_txt = (
-            "\n*🔑 Admin:*\n"
-            "• /panel – 🎛 Bảng điều khiển (nút bấm)\n"
-            "• /clone\\_topic `[tên]` – Clone topic sang forum mới\n"
-            "• /forcejoin `@kênh` | off – Bật/tắt force-join\n"
-            "• /allow `/disallow /whitelist` – Quản lý whitelist\n"
-            "• /stats /links /del\\_link – Thống kê & link\n"
-            "• /settings /set – Cài đặt\n"
+
+    # Member: hướng dẫn tối giản — chỉ bấm link xem
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "📖 *Hướng dẫn:*\n\n"
+            "👀 Bấm vào link chia sẻ để xem media.\n"
+            "Bot sẽ gửi nội dung về cho bạn.",
+            parse_mode=ParseMode.MARKDOWN
         )
+        return
+
+    # Admin: đầy đủ
     await update.message.reply_text(
-        "📖 *Hướng dẫn:*\n\n"
-        "• /start – Bắt đầu\n"
+        "📖 *Hướng dẫn (Admin):*\n\n"
+        "• /panel – 🎛 Bảng điều khiển (nút bấm)\n"
         "• /mylinks – Link của tôi\n"
         "• /share – Reply vào media → tạo link\n"
         "• /forward – Reply → forward có tên\n"
-        "• /fwd\\_anon – Reply → forward ẩn tên\n\n"
-        "📁 Gửi ảnh/video/file trực tiếp → bot tạo link chia sẻ\n"
-        + admin_txt,
+        "• /fwd\\_anon – Reply → forward ẩn tên\n"
+        "• /clone\\_topic `[tên]` – Clone topic sang forum mới\n"
+        "• /forcejoin `@kênh` | off – Bật/tắt force-join\n"
+        "• /allow `/disallow /whitelist` – Whitelist\n"
+        "• /stats /links /del\\_link /set – Quản lý\n\n"
+        "📁 Gửi media trực tiếp → tạo link chia sẻ",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -409,6 +421,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_mylinks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return   # member không có quyền — im lặng
     if not await gate(update, ctx):
         return
     uid  = update.effective_user.id
@@ -438,6 +452,8 @@ async def cmd_mylinks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_share(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return   # member không có quyền tạo link
     if not await gate(update, ctx):
         return
     user = update.effective_user
@@ -474,6 +490,8 @@ async def cmd_share(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return   # member không có quyền forward
     if not await gate(update, ctx):
         return
     if not update.message.reply_to_message:
@@ -497,6 +515,8 @@ async def cmd_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_fwd_anon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return   # member không có quyền forward
     if not await gate(update, ctx):
         return
     if not update.message.reply_to_message:
@@ -778,6 +798,14 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     record_user(user.id, user.full_name, user.username or "")
     fi   = extract_file_info(msg)
     if not fi:
+        return
+
+    # Member chỉ được xem — không tạo link bằng cách gửi media
+    if not is_admin(user.id):
+        await msg.reply_text(
+            "👀 Bạn chỉ có thể bấm vào link để xem media.\n"
+            "Tính năng tạo link chỉ dành cho admin."
+        )
         return
 
     ok, reason = can_upload(user.id)
