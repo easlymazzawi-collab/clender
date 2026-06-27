@@ -95,7 +95,7 @@
               <span class="badge badge-gray">⏸ Dừng</span>
             {% endif %}
           </td>
-          <td class="date">{{ s.updated_at or s.last_updated }}</td>
+          <td class="datestr" title="Tạo: {{ s.created_str }}">{{ s.updated_str }}</td>
           <td>
             <a href="{{ url_for('forwarder_session', key=s.key) }}" class="btn btn-xs" title="Chi tiết">📊</a>
             {% if live and live.status in ('running', 'starting') %}

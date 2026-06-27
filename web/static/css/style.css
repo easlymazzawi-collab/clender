@@ -182,6 +182,7 @@ code { font-family: 'JetBrains Mono', monospace; background: var(--bg3); padding
 .filename { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
 .caption-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
 .date { color: var(--text-muted); font-size: 12px; }
+.datestr { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .token { font-size: 11px; }
 .token-link { font-family: monospace; font-size: 11px; }
 

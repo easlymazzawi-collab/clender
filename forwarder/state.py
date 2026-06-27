@@ -183,6 +183,14 @@ def db_set_session_progress(key: str, progress: dict):
         logger.warning(f"db_set_session_progress: {e}")
 
 
+def _fmt_ts(ts) -> str:
+    """Unix timestamp → 'dd/mm/YYYY HH:MM'."""
+    try:
+        return datetime.datetime.fromtimestamp(float(ts)).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return "—"
+
+
 def db_list_sessions(limit=100) -> list[dict]:
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -194,8 +202,10 @@ def db_list_sessions(limit=100) -> list[dict]:
         result = []
         for r in rows:
             d = dict(r)
-            d["cfg"]      = json.loads(d.get("cfg_json") or "{}")
-            d["progress"] = json.loads(d.get("progress_json") or "{}")
+            d["cfg"]          = json.loads(d.get("cfg_json") or "{}")
+            d["progress"]     = json.loads(d.get("progress_json") or "{}")
+            d["created_str"]  = _fmt_ts(d.get("created_at"))
+            d["updated_str"]  = _fmt_ts(d.get("updated_at"))
             result.append(d)
         return result
     except Exception:

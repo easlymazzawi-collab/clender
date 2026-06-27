@@ -344,6 +344,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_admin(update.effective_user.id):
         admin_txt = (
             "\n*🔑 Admin:*\n"
+            "• /panel – 🎛 Bảng điều khiển (nút bấm)\n"
             "• /clone\\_topic `[tên]` – Clone topic sang forum mới\n"
             "• /forcejoin `@kênh` | off – Bật/tắt force-join\n"
             "• /allow `/disallow /whitelist` – Quản lý whitelist\n"
@@ -799,3 +800,154 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text("✅ Xác nhận thành công! Dùng /start để bắt đầu.")
         else:
             await q.answer("❌ Bạn vẫn chưa tham gia kênh.", show_alert=True)
+        return
+
+    # ── Admin panel callbacks ──────────────────────────────────────────────────
+    if data.startswith("panel:"):
+        if not is_admin(user.id):
+            await q.answer("🚫 Không có quyền.", show_alert=True)
+            return
+        await _handle_panel(q, ctx, data[len("panel:"):])
+        return
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADMIN PANEL — giao diện nút bấm
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _panel_main_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Thống kê", callback_data="panel:stats"),
+         InlineKeyboardButton("🔗 Link gần đây", callback_data="panel:links")],
+        [InlineKeyboardButton("🔒 Quyền Upload", callback_data="panel:upload"),
+         InlineKeyboardButton("📢 Force-Join", callback_data="panel:forcejoin")],
+        [InlineKeyboardButton("👥 Whitelist", callback_data="panel:whitelist"),
+         InlineKeyboardButton("⚙️ Cài đặt khác", callback_data="panel:settings")],
+        [InlineKeyboardButton("🌐 Web Admin", url=BASE_URL)],
+    ])
+
+
+def _panel_back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("◀️ Quay lại", callback_data="panel:main")
+    ]])
+
+
+async def cmd_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin control panel với nút bấm."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Bạn không có quyền.")
+        return
+    await update.message.reply_text(
+        "🎛 *BẢNG ĐIỀU KHIỂN ADMIN*\n\nChọn chức năng:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_panel_main_kb()
+    )
+
+
+async def _handle_panel(q, ctx, action: str):
+    """Xử lý các nút trong admin panel."""
+    if action == "main":
+        await q.message.edit_text(
+            "🎛 *BẢNG ĐIỀU KHIỂN ADMIN*\n\nChọn chức năng:",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_main_kb()
+        )
+        return
+
+    if action == "stats":
+        links  = list_media_links(limit=9999)
+        albums = list_media_albums(limit=9999)
+        topics = list_topics(limit=9999)
+        logs   = list_forward_logs(limit=9999)
+        await q.message.edit_text(
+            "📊 *THỐNG KÊ*\n\n"
+            f"🔗 Link đơn: `{len(links)}` (👁️{sum(l.get('access_count',0) for l in links)})\n"
+            f"📦 Album: `{len(albums)}` (👁️{sum(a.get('access_count',0) for a in albums)})\n"
+            f"📋 Topics clone: `{len(topics)}`\n"
+            f"↩️ Forwards: `{len(logs)}`",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_back_kb()
+        )
+        return
+
+    if action == "links":
+        links = list_media_links(limit=5) + list_media_albums(limit=5)
+        if not links:
+            txt = "📭 Chưa có link nào."
+        else:
+            lines = []
+            for l in list_media_albums(limit=8):
+                lines.append(f"• `{l['token']}` — 📦album — 👁️{l.get('access_count',0)}")
+            txt = "🔗 *ALBUM GẦN ĐÂY:*\n\n" + ("\n".join(lines) or "trống")
+        await q.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN,
+                                  reply_markup=_panel_back_kb())
+        return
+
+    if action == "upload":
+        mode = _upload_mode()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(("✅ " if mode=="all" else "") + "Tất cả",
+                                  callback_data="panel:setmode:all")],
+            [InlineKeyboardButton(("✅ " if mode=="admin" else "") + "Chỉ Admin",
+                                  callback_data="panel:setmode:admin")],
+            [InlineKeyboardButton(("✅ " if mode=="whitelist" else "") + "Whitelist",
+                                  callback_data="panel:setmode:whitelist")],
+            [InlineKeyboardButton("◀️ Quay lại", callback_data="panel:main")],
+        ])
+        await q.message.edit_text(
+            f"🔒 *QUYỀN UPLOAD*\n\nHiện tại: `{mode}`\n\nChọn chế độ:",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=kb
+        )
+        return
+
+    if action.startswith("setmode:"):
+        mode = action.split(":", 1)[1]
+        set_setting("upload_mode", mode)
+        await q.answer(f"✅ Đã đặt: {mode}")
+        await _handle_panel(q, ctx, "upload")
+        return
+
+    if action == "forcejoin":
+        ch  = get_setting("force_join_channel", "") or "(tắt)"
+        sec = get_setting("force_join_check_sec", "300")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Tắt Force-Join", callback_data="panel:fj_off")],
+            [InlineKeyboardButton("◀️ Quay lại", callback_data="panel:main")],
+        ])
+        await q.message.edit_text(
+            f"📢 *FORCE-JOIN*\n\n"
+            f"Kênh: `{ch}`\nCheck mỗi: `{sec}`s\n\n"
+            "Để bật/đổi kênh, gõ lệnh:\n"
+            "`/forcejoin @kênhcủabạn`\n"
+            "(chấp nhận cả link t.me/...)",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=kb
+        )
+        return
+
+    if action == "fj_off":
+        set_setting("force_join_channel", "")
+        await q.answer("✅ Đã tắt Force-Join")
+        await _handle_panel(q, ctx, "forcejoin")
+        return
+
+    if action == "whitelist":
+        wl = _whitelist()
+        body = "\n".join(f"• `{u}`" for u in sorted(wl)) if wl else "_trống_"
+        await q.message.edit_text(
+            f"👥 *WHITELIST ({len(wl)})*\n\n{body}\n\n"
+            "Thêm/xóa bằng lệnh:\n`/allow <id>`  `/disallow <id>`",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_back_kb()
+        )
+        return
+
+    if action == "settings":
+        await q.message.edit_text(
+            "⚙️ *CÀI ĐẶT KHÁC*\n\n"
+            f"📏 Max file: `{_max_mb()} MB`\n"
+            f"⏱️ Rate limit: `{get_setting('rate_limit','20')}/giờ`\n\n"
+            "Đổi bằng lệnh:\n"
+            "`/set max_file_mb 50`\n"
+            "`/set rate_limit 20`\n"
+            "`/set caption_template ...`",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_back_kb()
+        )
+        return

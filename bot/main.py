@@ -15,7 +15,7 @@ from bot.handlers import (
     cmd_clone_topic, cmd_stats, cmd_links, cmd_del_link,
     cmd_settings, cmd_set,
     cmd_allow, cmd_disallow, cmd_whitelist,
-    cmd_forcejoin,
+    cmd_forcejoin, cmd_panel,
     handle_media, handle_callback,
 )
 
@@ -54,6 +54,8 @@ def build_app():
     app.add_handler(CommandHandler("disallow",    cmd_disallow))
     app.add_handler(CommandHandler("whitelist",   cmd_whitelist))
     app.add_handler(CommandHandler("forcejoin",   cmd_forcejoin))
+    app.add_handler(CommandHandler("panel",       cmd_panel))
+    app.add_handler(CommandHandler("admin",       cmd_panel))
 
     # ── Media handler ──────────────────────────────────────────────────────────
     app.add_handler(MessageHandler(
