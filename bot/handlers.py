@@ -13,6 +13,7 @@ Yêu cầu hệ thống:
 
 import asyncio
 import logging
+import re
 import time
 from collections import defaultdict
 
@@ -30,7 +31,9 @@ from database.models import (
     upsert_topic, list_topics, list_forward_logs,
     log_forward, get_setting, set_setting, all_settings,
     get_media_album, list_media_albums, get_conn,
+    create_album_from_file_ids,
 )
+from utils.token import generate_numeric_token
 from bot.membership import gate, invalidate as invalidate_membership_cache
 
 logger = logging.getLogger(__name__)
@@ -218,8 +221,49 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
     chat_id     = update.effective_chat.id
     src_chat_id = album["src_chat_id"]
     src_msg_ids = album["src_msg_ids"]
-    n           = len(src_msg_ids)
+    file_ids    = album.get("file_ids") or []
 
+    # ── Trường hợp media nhận trực tiếp qua bot → gửi lại bằng file_id ────────
+    if file_ids:
+        from telegram import (
+            InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
+        )
+        cap = album.get("caption") or ""
+        media_group = []
+        for i, f in enumerate(file_ids):
+            c = cap if i == len(file_ids) - 1 else None
+            t = f.get("type")
+            fid = f.get("file_id")
+            if t == "photo":
+                media_group.append(InputMediaPhoto(fid, caption=c))
+            elif t in ("video", "animation", "video_note"):
+                media_group.append(InputMediaVideo(fid, caption=c))
+            elif t == "audio":
+                media_group.append(InputMediaAudio(fid, caption=c))
+            else:
+                media_group.append(InputMediaDocument(fid, caption=c))
+        try:
+            if len(media_group) == 1:
+                m = file_ids[0]
+                send_map = {
+                    "photo": ctx.bot.send_photo, "video": ctx.bot.send_video,
+                    "animation": ctx.bot.send_animation, "audio": ctx.bot.send_audio,
+                    "voice": ctx.bot.send_voice, "document": ctx.bot.send_document,
+                }
+                fn = send_map.get(m.get("type"), ctx.bot.send_document)
+                kw = {"caption": cap} if cap else {}
+                # tên tham số khác nhau theo loại
+                key = {"photo":"photo","video":"video","animation":"animation",
+                       "audio":"audio","voice":"voice"}.get(m.get("type"),"document")
+                await fn(chat_id=chat_id, **{key: m.get("file_id")}, **kw)
+            else:
+                await ctx.bot.send_media_group(chat_id=chat_id, media=media_group)
+            logger.info(f"serve_album OK via file_ids ({len(file_ids)})")
+            return
+        except Exception as e:
+            logger.warning(f"serve via file_ids failed: {e}")
+
+    n = len(src_msg_ids)
     logger.info(f"serve_album: user={user.id} src={src_chat_id} msgs={src_msg_ids}")
 
     if not src_msg_ids:
@@ -599,8 +643,7 @@ async def cmd_forcejoin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         set_setting("force_join_channel", "")
         await update.message.reply_text("✅ Đã tắt force-join.")
     else:
-        if not val.startswith("@") and not val.lstrip("-").isdigit():
-            val = "@" + val
+        val = _normalize_channel(val)
         set_setting("force_join_channel", val)
         await update.message.reply_text(
             f"✅ Force-join bật: `{val}`\n⚠️ Bot phải là Admin trong kênh đó.",
@@ -608,26 +651,48 @@ async def cmd_forcejoin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
+def _normalize_channel(val: str) -> str:
+    """
+    Chuẩn hóa input kênh về dạng @username hoặc -100xxx.
+    Chấp nhận: @user, user, https://t.me/user, t.me/user, -100xxx
+    """
+    val = val.strip()
+    # Link t.me/username hoặc https://t.me/username
+    m = re.search(r"t\.me/([A-Za-z]\w{3,31})", val)
+    if m:
+        return "@" + m.group(1)
+    # Link t.me/c/123 (private) → -100123
+    m = re.search(r"t\.me/c/(\d+)", val)
+    if m:
+        return f"-100{m.group(1)}"
+    # ID âm
+    if val.lstrip("-").isdigit():
+        return val
+    # username thuần
+    return val if val.startswith("@") else "@" + val
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MEDIA HANDLER — CHỈ PRIVATE CHAT
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Buffer album theo media_group_id: {key: {"items":[...], "task":..., "msg":...}}
+_album_buf: dict = {}
+_ALBUM_FLUSH_DELAY = 1.5   # giây chờ gom đủ các phần của album
+
+
 async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Tạo link chia sẻ khi user gửi media.
+    Tạo link chia sẻ khi user gửi/forward media vào bot (PRIVATE CHAT).
 
-    QUAN TRỌNG: Chỉ xử lý trong PRIVATE CHAT.
-    Nếu không lọc: bot là admin trong forum đích → nhận mọi ảnh Telethon
-    forward vào đó → tự kích hoạt → gửi lại ảnh → spam.
+    Album (media_group_id): gom tất cả phần → 1 token → 1 link duy nhất.
+    Single: 1 token → 1 link.
+
+    CHỈ PRIVATE CHAT — tránh tự kích hoạt khi bot là admin forum đích.
     """
     msg = update.message
-    if not msg:
+    if not msg or update.effective_chat.type != "private":
         return
-
-    # CHỈ PRIVATE CHAT — quan trọng nhất
-    if update.effective_chat.type != "private":
-        return
-
     if not await gate(update, ctx):
         return
 
@@ -640,31 +705,79 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ok:
         await msg.reply_text(reason)
         return
-
     if fi.get("size_mb", 0) > _max_mb():
         await msg.reply_text(f"❌ File quá lớn ({fi['size_mb']:.1f} MB). Giới hạn: {_max_mb()} MB.")
         return
 
+    # ── Album: gom theo media_group_id ────────────────────────────────────────
+    mgid = msg.media_group_id
+    if mgid:
+        key = f"{user.id}_{mgid}"
+        entry = _album_buf.get(key)
+        if entry and entry.get("task"):
+            entry["task"].cancel()
+        if not entry:
+            entry = {"items": [], "msg": msg, "cap": ""}
+            _album_buf[key] = entry
+        entry["items"].append({"type": fi["file_type"], "file_id": fi["file_id"]})
+        if msg.caption and not entry["cap"]:
+            entry["cap"] = msg.caption
+        # Hẹn flush sau delay (mỗi phần mới reset timer)
+        entry["task"] = asyncio.create_task(
+            _flush_album(key, ctx, user)
+        )
+        return
+
+    # ── Single media → 1 link ────────────────────────────────────────────────
     token = await _create_link(msg, user.id, user.full_name)
     if not token:
         return
-
     url      = build_share_url(token)
     orig_cap = (msg.caption or msg.text or "").strip()
     full_cap = _caption_with_link(orig_cap, url)
 
-    # Gửi lại: ảnh/thumbnail + caption với link
     if fi["file_type"] in ("video", "video_note", "animation") and fi.get("thumb_file_id"):
-        await msg.reply_photo(
-            photo=fi["thumb_file_id"],
-            caption=full_cap[:1024],
-        )
+        await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
     elif fi["file_type"] == "photo":
-        await msg.reply_photo(
-            photo=fi["file_id"],
-            caption=full_cap[:1024],
-        )
+        await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
     else:
+        await msg.reply_text(full_cap[:4096])
+
+
+async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
+    """Sau khi gom đủ các phần album → tạo 1 token + trả 1 link."""
+    try:
+        await asyncio.sleep(_ALBUM_FLUSH_DELAY)
+    except asyncio.CancelledError:
+        return   # có phần mới đến → timer reset, lần sau flush
+
+    entry = _album_buf.pop(key, None)
+    if not entry or not entry["items"]:
+        return
+
+    items = entry["items"]
+    cap   = entry["cap"]
+    msg   = entry["msg"]
+
+    # Tạo 1 token cho cả album (lưu file_ids để bot gửi lại)
+    token = generate_numeric_token(16)
+    create_album_from_file_ids(token, items, cap)
+
+    url      = build_share_url(token)
+    full_cap = _caption_with_link(cap.strip(), url)
+
+    # Preview: thumbnail/ảnh đầu + caption link
+    first = items[0]
+    try:
+        if first["type"] == "photo":
+            await msg.reply_photo(photo=first["file_id"], caption=full_cap[:1024])
+        else:
+            # video/file → gửi text link (đơn giản, tránh tải thumbnail phức tạp)
+            await msg.reply_text(
+                f"📦 Album {len(items)} media\n\n{full_cap}"[:4096]
+            )
+    except Exception as e:
+        logger.warning(f"_flush_album reply: {e}")
         await msg.reply_text(full_cap[:4096])
 
 

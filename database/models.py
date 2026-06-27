@@ -85,6 +85,7 @@ def init_db() -> None:
             src_msg_ids  TEXT    NOT NULL,   -- JSON array of message IDs e.g. [101,102,103]
             caption      TEXT,               -- original caption of the album
             thumb_file_id TEXT,              -- file_id of thumbnail for the destination post
+            file_ids     TEXT,               -- JSON [{type,file_id}] cho media nhận trực tiếp qua bot
             created_at   DATETIME DEFAULT (datetime('now')),
             access_count INTEGER  DEFAULT 0,
             is_active    INTEGER  DEFAULT 1
@@ -94,6 +95,14 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_album_token  ON media_albums(token);
         CREATE INDEX IF NOT EXISTS idx_fwd_source   ON forward_log(source_chat_id, source_msg_id);
     """)
+
+    # Migration: thêm cột file_ids nếu DB cũ chưa có
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(media_albums)").fetchall()]
+    if "file_ids" not in cols:
+        try:
+            cur.execute("ALTER TABLE media_albums ADD COLUMN file_ids TEXT")
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()
@@ -282,6 +291,24 @@ def create_media_album(token: str, src_chat_id: int, src_msg_ids: list,
     return d
 
 
+def create_album_from_file_ids(token: str, file_ids: list, caption: str = "") -> dict:
+    """
+    Tạo album record từ danh sách file_id (media nhận trực tiếp qua bot).
+    file_ids: list[{"type": "photo"/"video"/..., "file_id": "..."}]
+    """
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR IGNORE INTO media_albums
+           (token, src_chat_id, src_msg_ids, caption, file_ids)
+           VALUES (?,?,?,?,?)""",
+        (token, 0, _json.dumps([]), caption or "", _json.dumps(file_ids))
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM media_albums WHERE token=?", (token,)).fetchone()
+    conn.close()
+    return dict(row) if row else {}
+
+
 def get_media_album(token: str) -> dict | None:
     """Fetch album by token; increments access_count."""
     conn = get_conn()
@@ -299,6 +326,10 @@ def get_media_album(token: str) -> dict | None:
         return None
     d = dict(row)
     d["src_msg_ids"] = _json.loads(d["src_msg_ids"])
+    try:
+        d["file_ids"] = _json.loads(d.get("file_ids") or "[]")
+    except Exception:
+        d["file_ids"] = []
     return d
 
 
