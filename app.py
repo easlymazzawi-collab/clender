@@ -453,6 +453,11 @@ def api_fwd_session(key: str):
 
 # ─── Error handlers ───────────────────────────────────────────────────────────
 
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204   # No Content — stop browser spam in logs
+
+
 @app.errorhandler(404)
 def not_found(e):
     return render_template("404.html"), 404

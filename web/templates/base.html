@@ -22,7 +22,7 @@
       </a>
 
       <div class="nav-section-label">⚡ Forwarder</div>
-      <a href="{{ url_for('forwarder_dashboard') }}" class="nav-item {% if 'forwarder' in request.endpoint %}active{% endif %}">
+      <a href="{{ url_for('forwarder_dashboard') }}" class="nav-item {% if 'forwarder' in (request.endpoint or '') %}active{% endif %}">
         <span class="nav-icon">📤</span> Quản Lý Phiên
       </a>
       <a href="{{ url_for('forwarder_new') }}" class="nav-item">
