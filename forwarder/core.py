@@ -179,22 +179,36 @@ class PermanentForwardError(Exception):
         super().__init__(f"{type(orig).__name__}: {orig}")
 
 
+def _parse_new_ids_from_updates(result) -> list[int]:
+    """
+    Parse a Telethon Updates object returned by ForwardMessagesRequest
+    and return the new message IDs in the destination (sorted ascending).
+    """
+    ids = []
+    for upd in getattr(result, "updates", []):
+        msg = getattr(upd, "message", None)
+        if msg and hasattr(msg, "id") and not getattr(msg, "action", None):
+            ids.append(msg.id)
+    return sorted(ids)
+
+
 async def send_msgs(client, msgs, dst_entity, hide_sender, dst_topic,
                     src_peer, dst_peer, max_attempts=4):
     """
     Forward messages in one API call.
     hide_sender=True → drop_author=True (no "Forwarded from", keeps formatting).
     Permanent errors → PermanentForwardError (do not retry).
+    Returns the raw Updates result so callers can extract dest message IDs.
     """
     if not msgs:
-        return
+        return None
     kw = {}
     if dst_topic and dst_topic != 1:
         kw["top_msg_id"] = dst_topic
 
     for attempt in range(max_attempts):
         try:
-            await client(ForwardMessagesRequest(
+            result = await client(ForwardMessagesRequest(
                 from_peer=src_peer, to_peer=dst_peer,
                 id=[m.id for m in msgs],
                 random_id=[
@@ -205,7 +219,7 @@ async def send_msgs(client, msgs, dst_entity, hide_sender, dst_topic,
                 noforwards=False,
                 **kw,
             ))
-            return
+            return result   # caller can extract dest IDs from Updates
         except FloodWaitError as e:
             wait = e.seconds + 2
             logger.info(f"FloodWait {wait}s (attempt {attempt+1}/{max_attempts})")
@@ -218,6 +232,91 @@ async def send_msgs(client, msgs, dst_entity, hide_sender, dst_topic,
             backoff = 2 * (attempt + 1)
             logger.warning(f"send retry {attempt+1}/{max_attempts}: {type(e).__name__}: {e} — wait {backoff}s")
             await asyncio.sleep(backoff)
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PINNED MESSAGE HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def get_pinned_message_ids(client: TelegramClient, entity,
+                                 topic_id: int | None) -> list[int]:
+    """
+    Return list of pinned message IDs in a topic (or General/whole chat).
+    Ordered newest-pin-first (same as Telegram UI).
+    """
+    from telethon.tl.types import InputMessagesFilterPinned
+    try:
+        if topic_id and topic_id != 1:
+            msgs = await client.get_messages(
+                entity,
+                filter=InputMessagesFilterPinned,
+                reply_to=topic_id,
+                limit=100,
+            )
+        else:
+            msgs = await client.get_messages(
+                entity,
+                filter=InputMessagesFilterPinned,
+                limit=100,
+            )
+        return [m.id for m in msgs if m and not getattr(m, "action", None)]
+    except Exception as e:
+        logger.warning(f"get_pinned_message_ids topic={topic_id}: {e}")
+        return []
+
+
+async def pin_message(client: TelegramClient, entity, msg_id: int,
+                      silent: bool = True) -> bool:
+    """
+    Pin msg_id in entity (channel / supergroup forum topic).
+    silent=True → no "X pinned a message" notification in chat.
+    Returns True on success.
+    """
+    from telethon.tl.functions.messages import UpdatePinnedMessageRequest
+    try:
+        await client(UpdatePinnedMessageRequest(
+            peer=entity,
+            id=msg_id,
+            silent=silent,
+            unpin=False,
+            pm_oneside=False,
+        ))
+        return True
+    except Exception as e:
+        logger.warning(f"pin_message id={msg_id}: {e}")
+        return False
+
+
+async def clone_pinned_messages(client: TelegramClient,
+                                src_entity, dst_entity,
+                                src_topic_id: int | None,
+                                id_map: dict[int, int]) -> int:
+    """
+    After a topic is fully forwarded, pin the correct messages in dst.
+
+    id_map: {src_msg_id: dst_msg_id} — built during forwarding.
+    Returns number of messages successfully pinned.
+    """
+    pinned_src_ids = await get_pinned_message_ids(client, src_entity, src_topic_id)
+    if not pinned_src_ids:
+        return 0
+
+    pinned = 0
+    # Pin in REVERSE order so the "first" pinned message in source
+    # ends up on top in destination (Telegram stacks pins newest-first)
+    for src_id in reversed(pinned_src_ids):
+        dst_id = id_map.get(src_id)
+        if dst_id:
+            ok = await pin_message(client, dst_entity, dst_id)
+            if ok:
+                pinned += 1
+                logger.info(f"Pinned dst={dst_id} (src={src_id})")
+            await asyncio.sleep(0.5)
+        else:
+            logger.debug(f"No dst mapping for pinned src_id={src_id} — skipped")
+
+    return pinned
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -385,10 +484,14 @@ async def forward_topic_messages(client, src_entity, dst_entity,
       Albums are sent photo-by-photo (each with its own link).
       Text-only messages are sent as-is.
     """
-    only_filter = cfg.get("only_filter", "all")
-    hide_sender = cfg.get("hide_sender", False)
-    link_mode   = cfg.get("link_mode", False)
-    caption_tpl = cfg.get("caption_template") or None
+    only_filter   = cfg.get("only_filter", "all")
+    hide_sender   = cfg.get("hide_sender", False)
+    link_mode     = cfg.get("link_mode", False)
+    caption_tpl   = cfg.get("caption_template") or None
+    clone_pins    = cfg.get("clone_pins", True)   # pin matching messages in dest
+
+    # src_id → dst_id mapping (populated during forward, used for pinning)
+    id_map: dict[int, int] = {}
 
     topic_state_key = f"{map_key}_topic_{src_topic_id}"
     last_id         = load_last_id(topic_state_key)
@@ -434,10 +537,17 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         n        = len(batch_buffer)
         first_id = batch_buffer[0].id
         last_mid = batch_buffer[-1].id
+        src_ids  = [m.id for m in batch_buffer]
         try:
             flush_skip_log(first_id - 1)
-            await send_msgs(client, list(batch_buffer), dst_entity, hide_sender,
-                            dst_topic_id, src_peer, dst_peer)
+            result = await send_msgs(client, list(batch_buffer), dst_entity, hide_sender,
+                                     dst_topic_id, src_peer, dst_peer)
+            # Build src→dest ID mapping from Updates result
+            if result is not None:
+                dest_ids = _parse_new_ids_from_updates(result)
+                if len(dest_ids) == len(src_ids):
+                    for s, d in zip(src_ids, dest_ids):
+                        id_map[s] = d
             count += n
             stats["normal"] += n
             last_id_buf = last_mid
@@ -499,7 +609,12 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                 )
                 n_sent = len([s for s in sent_list if s])
                 if n_sent:
-                    count += n  # count each original message in album
+                    # Map each album item to the LAST sent message (whole album = 1 link)
+                    last_sent = next((s for s in reversed(sent_list) if s), None)
+                    if last_sent:
+                        for m in album:
+                            id_map[m.id] = last_sent.id
+                    count += n
                     stats["album"] += 1
                     stats["links_created"] = stats.get("links_created", 0) + n
                 else:
@@ -520,10 +635,17 @@ async def forward_topic_messages(client, src_entity, dst_entity,
             return
 
         # ── Normal mode: forward whole album in one API call ─────────────────
+        alb_src_ids = [m.id for m in album]
         try:
             flush_skip_log(first_id - 1)
-            await send_msgs(client, album, dst_entity, hide_sender,
-                            dst_topic_id, src_peer, dst_peer)
+            result = await send_msgs(client, album, dst_entity, hide_sender,
+                                     dst_topic_id, src_peer, dst_peer)
+            # Build ID mapping for album items
+            if result is not None:
+                dest_ids = _parse_new_ids_from_updates(result)
+                if len(dest_ids) == len(alb_src_ids):
+                    for s, d in zip(alb_src_ids, dest_ids):
+                        id_map[s] = d
             count += n
             stats["album"] += 1
             last_id_buf = last_mid
@@ -623,6 +745,7 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                     caption_tpl,
                 )
                 if sent:
+                    id_map[msg.id] = sent.id   # track for pinning
                     count += 1
                     stats["normal"] += 1
                     stats["links_created"] = stats.get("links_created", 0) + 1
@@ -666,6 +789,18 @@ async def forward_topic_messages(client, src_entity, dst_entity,
     if last_id_buf:
         save_last_id(topic_state_key, last_id_buf)
 
+    # ── Clone pinned messages ─────────────────────────────────────────────────
+    pinned_count = 0
+    if clone_pins and id_map:
+        logger.info(f"Cloning pinned messages for topic={src_topic_id}…")
+        pinned_count = await clone_pinned_messages(
+            client, src_entity, dst_entity,
+            src_topic_id, id_map,
+        )
+        if pinned_count:
+            stats["pins_cloned"] = stats.get("pins_cloned", 0) + pinned_count
+            logger.info(f"Pinned {pinned_count} message(s) in dst topic {dst_topic_id}")
+
     return count, skipped
 
 
@@ -686,6 +821,7 @@ async def run_session(client: TelegramClient, cfg: dict,
     auto_topic     = cfg.get("auto_topic", True)
     link_mode      = cfg.get("link_mode", False)
     caption_tpl    = cfg.get("caption_template") or None
+    clone_pins     = cfg.get("clone_pins", True)
 
     try:
         src_entity = await resolve_entity(client, src_raw)
@@ -991,12 +1127,14 @@ async def run_forum_backup(client: TelegramClient, cfg: dict,
             "current_topic":   title,
         })
 
+    pins_cloned = stats.get("pins_cloned", 0)
     final_progress = {
         "total_forwarded": total_forwarded,
         "topics_done":     total_topics,
         "topics_total":    total_topics,
         "errors":          stats["errors"],
         "skipped":         total_skipped,
+        "pins_cloned":     pins_cloned,
     }
     save_session_meta(map_key, src_name, dst_name, "backup", cfg, progress=final_progress)
 
@@ -1010,6 +1148,7 @@ async def run_forum_backup(client: TelegramClient, cfg: dict,
             "total": total_forwarded, "normal": stats["normal"],
             "albums": stats["album"], "skipped": total_skipped,
             "errors": stats["errors"], "topics": len(per_topic_count),
+            "pins_cloned": pins_cloned,
             "per_topic": per_topic_count,
         })
 

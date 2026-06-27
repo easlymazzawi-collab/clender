@@ -283,6 +283,7 @@ def forwarder_start():
         cfg["icon_mode"]    = f.get("icon_mode", "clone")
         cfg["emoji_raw"]    = f.get("emoji_raw", "").strip()
         cfg["skip_general"] = f.get("skip_general") == "on"
+        cfg["clone_pins"]   = f.get("clone_pins") == "on"
     else:
         cfg["start_msg_id"]   = int(f.get("start_msg_id") or 0) or None
         cfg["force_topic_id"] = int(f.get("force_topic_id") or 0) or None
