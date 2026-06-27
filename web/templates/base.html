@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Forum Bot Admin{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">🤖</span>
+      <span class="brand-name">Forum Bot</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="{{ url_for('dashboard') }}" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
+        <span class="nav-icon">📊</span> Tổng Quan
+      </a>
+      <a href="{{ url_for('page_links') }}" class="nav-item {% if request.endpoint == 'page_links' %}active{% endif %}">
+        <span class="nav-icon">🔗</span> Danh Sách Link
+      </a>
+      <a href="{{ url_for('page_topics') }}" class="nav-item {% if request.endpoint == 'page_topics' %}active{% endif %}">
+        <span class="nav-icon">📋</span> Chủ Đề
+      </a>
+      <a href="{{ url_for('page_logs') }}" class="nav-item {% if request.endpoint == 'page_logs' %}active{% endif %}">
+        <span class="nav-icon">📜</span> Lịch Sử Forward
+      </a>
+      <a href="{{ url_for('page_settings') }}" class="nav-item {% if request.endpoint == 'page_settings' %}active{% endif %}">
+        <span class="nav-icon">⚙️</span> Cài Đặt
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <a href="https://t.me/" target="_blank" class="nav-item">
+        <span class="nav-icon">✈️</span> Telegram Bot
+      </a>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="main-wrapper">
+    <header class="topbar">
+      <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+      <h1 class="topbar-title">{% block page_title %}Dashboard{% endblock %}</h1>
+      <div class="topbar-right">
+        <span class="status-dot online"></span>
+        <span class="status-text">Bot đang hoạt động</span>
+      </div>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      <p>Forum Converter Bot &copy; 2024 – Hệ thống chuyển đổi diễn đàn thông minh</p>
+    </footer>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

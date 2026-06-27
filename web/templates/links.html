@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Danh Sách Link – Forum Bot Admin{% endblock %}
+{% block page_title %}🔗 Danh Sách Link Chia Sẻ{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">Tổng cộng {{ links|length }} link</h2>
+    <div class="header-actions">
+      <input type="text" id="searchInput" class="input-sm" placeholder="🔍 Tìm token / tên file…" oninput="filterTable()" />
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="table" id="linksTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Token</th>
+          <th>Loại</th>
+          <th>Tên file</th>
+          <th>Caption</th>
+          <th>👁️ Lượt xem</th>
+          <th>Người upload</th>
+          <th>Ngày tạo</th>
+          <th>Hành động</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in links %}
+        <tr data-token="{{ l.token }}" data-name="{{ l.file_name or '' }}">
+          <td>{{ loop.index }}</td>
+          <td>
+            <code class="token">{{ l.token }}</code>
+            <button class="btn-copy" title="Copy link" onclick="copyLink('{{ base_url }}/media/{{ l.token }}')">📋</button>
+          </td>
+          <td><span class="badge badge-{{ l.file_type }}">{{ l.file_type }}</span></td>
+          <td class="filename">{{ l.file_name or '–' }}</td>
+          <td class="caption-cell" title="{{ l.caption or '' }}">
+            {{ (l.caption or '')[:40] }}{% if l.caption and l.caption|length > 40 %}…{% endif %}
+          </td>
+          <td>{{ l.access_count }}</td>
+          <td>{{ l.uploader_name or '–' }}</td>
+          <td class="date">{{ l.created_at }}</td>
+          <td>
+            <a href="{{ base_url }}/media/{{ l.token }}" target="_blank" class="btn btn-xs" title="Mở link">🔗</a>
+            <a href="{{ base_url }}/media/{{ l.token }}/info" target="_blank" class="btn btn-xs" title="Chi tiết">ℹ️</a>
+            <button class="btn btn-xs btn-danger" onclick="deleteLink('{{ l.token }}')" title="Xóa">🗑️</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">Chưa có link nào được tạo</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('#linksTable tbody tr').forEach(row => {
+    const token = row.dataset.token || '';
+    const name = row.dataset.name || '';
+    row.style.display = (token.includes(q) || name.toLowerCase().includes(q)) ? '' : 'none';
+  });
+}
+
+function copyLink(url) {
+  navigator.clipboard.writeText(url).then(() => showToast('✅ Đã copy link!'));
+}
+
+async function deleteLink(token) {
+  if (!confirm(`Xóa link ${token}?`)) return;
+  const res = await fetch(`/api/links/${token}`, { method: 'DELETE' });
+  const j = await res.json();
+  if (j.ok) {
+    showToast('✅ Đã xóa link');
+    document.querySelector(`tr[data-token="${token}"]`)?.remove();
+  }
+}
+</script>
+{% endblock %}
