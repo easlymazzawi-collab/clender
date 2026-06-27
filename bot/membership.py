@@ -83,6 +83,18 @@ def invalidate(user_id: int):
     _cache.pop(user_id, None)
 
 
+# Token deep-link đang chờ sau khi user join kênh: {user_id: token}
+_pending_token: dict = {}
+
+
+def set_pending_token(user_id: int, token: str):
+    _pending_token[user_id] = token
+
+
+def pop_pending_token(user_id: int):
+    return _pending_token.pop(user_id, None)
+
+
 # ─── Core check ───────────────────────────────────────────────────────────────
 
 MEMBER_STATUSES = {

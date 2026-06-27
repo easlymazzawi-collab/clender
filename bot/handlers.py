@@ -213,6 +213,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if ctx.args:
         token = ctx.args[0].strip()
         if not await gate(update, ctx):
+            # Bị chặn vì chưa join kênh → lưu token để serve sau khi join
+            from bot.membership import set_pending_token
+            set_pending_token(user.id, token)
             return
         # Chống spam bấm link
         ok, wait = _check_serve_rate(user.id)
@@ -267,6 +270,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
     """
     user        = update.effective_user
     chat_id     = update.effective_chat.id
+    reply_to    = update.effective_message   # works cho cả message lẫn callback
     src_chat_id = album["src_chat_id"]
     src_msg_ids = album["src_msg_ids"]
     file_ids    = album.get("file_ids") or []
@@ -315,7 +319,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
     logger.info(f"serve_album: user={user.id} src={src_chat_id} msgs={src_msg_ids}")
 
     if not src_msg_ids:
-        await update.message.reply_text("❌ Album trống.")
+        await reply_to.reply_text("❌ Album trống.")
         return
 
     # ── Thử 1: copy_messages (batch, không có 'Forwarded from') ──────────────
@@ -364,7 +368,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
                 logger.warning(f"Cannot serve msg {mid}: {e2}")
 
     if sent == 0:
-        await update.message.reply_text(
+        await reply_to.reply_text(
             "❌ Không thể gửi media.\n\n"
             "Nguyên nhân có thể:\n"
             "• Bot chưa được thêm vào forum nguồn\n"
@@ -375,7 +379,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
         )
         logger.error(f"serve_album FAILED: src={src_chat_id} msgs={src_msg_ids}")
     elif sent < n:
-        await update.message.reply_text(
+        await reply_to.reply_text(
             f"⚠️ Đã gửi {sent}/{n} file. {n - sent} file không khả dụng."
         )
         logger.info(f"serve_album partial: {sent}/{n}")
@@ -985,12 +989,29 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "check_membership":
         invalidate_membership_cache(user.id)
-        from bot.membership import check_user
+        from bot.membership import check_user, pop_pending_token
         ok = await check_user(ctx.bot, user.id)
-        if ok:
-            await q.message.edit_text("✅ Xác nhận thành công! Dùng /start để bắt đầu.")
-        else:
-            await q.answer("❌ Bạn vẫn chưa tham gia kênh.", show_alert=True)
+        if not ok:
+            await q.answer("❌ Bạn vẫn chưa tham gia kênh. Hãy join rồi bấm lại.",
+                           show_alert=True)
+            return
+
+        # Đã join → nếu có token đang chờ, tự gửi media luôn
+        token = pop_pending_token(user.id)
+        if token:
+            album = get_media_album(token)
+            if album:
+                await q.message.edit_text("✅ Xác nhận thành công! Đang gửi media…")
+                # Tạo "update giả" dùng message hiện tại để serve
+                ok2, wait = _check_serve_rate(user.id)
+                if ok2:
+                    await _serve_album(update, ctx, album)
+                else:
+                    await q.message.reply_text(f"⏳ Chờ {wait}s rồi bấm lại link.")
+                return
+        await q.message.edit_text(
+            "✅ Xác nhận thành công! Bấm lại link để xem media."
+        )
         return
 
     # ── Admin panel callbacks ──────────────────────────────────────────────────
