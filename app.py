@@ -1,36 +1,54 @@
 """
-Flask web server.
+Flask web server — Forum Converter Bot + Telethon Forwarder.
 
 Routes:
-  GET  /               – Admin dashboard
-  GET  /media/<token>  – Serve media (redirects to Telegram CDN or sends file)
-  GET  /api/links      – JSON list of share links
-  GET  /api/topics     – JSON list of cloned topics
-  GET  /api/logs       – JSON list of forward logs
-  GET  /api/stats      – JSON stats summary
-  POST /api/settings   – Update settings
-  DELETE /api/links/<token> – Deactivate link
+  GET  /                     – Admin dashboard
+  GET  /media/<token>        – Serve media (redirect → Telegram CDN)
+  ── Admin pages ──
+  GET  /admin/links          – Share links manager
+  GET  /admin/topics         – Cloned topics overview
+  GET  /admin/logs           – Forward logs
+  GET  /admin/settings       – Bot settings
+  ── Forwarder pages ──
+  GET  /forwarder            – Forwarder dashboard (session list)
+  GET  /forwarder/new        – New session form
+  POST /forwarder/start      – Start new session
+  POST /forwarder/stop/<key> – Stop running session
+  POST /forwarder/delete/<key> – Delete session
+  GET  /forwarder/session/<key> – Session detail + live log
+  GET  /forwarder/stream/<key>  – SSE progress stream
+  ── REST API ──
+  GET  /api/links, /api/topics, /api/logs, /api/stats, /api/settings (POST)
+  GET  /api/forwarder/sessions
+  GET  /api/forwarder/session/<key>
 """
 
 import asyncio
+import json
 import logging
 import os
+import time
 import threading
 
 from flask import (
     Flask, render_template, jsonify, request,
-    redirect, url_for, abort, send_file
+    redirect, url_for, abort, send_file, Response, stream_with_context
 )
 from telegram import Bot
 
 from config.settings import (
-    BOT_TOKEN, BASE_URL, SECRET_KEY, WEB_HOST, WEB_PORT, MEDIA_DIR
+    BOT_TOKEN, BASE_URL, SECRET_KEY, WEB_HOST, WEB_PORT, MEDIA_DIR,
+    TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION, TELETHON_PHONE,
 )
 from database.models import (
     init_db, get_media_link, list_media_links, delete_media_link,
-    list_topics, list_forward_logs, all_settings, set_setting,
-    get_conn
+    list_topics, list_forward_logs, all_settings, set_setting, get_conn,
 )
+from forwarder.state import (
+    db_list_sessions, db_get_session, db_delete_session,
+    sync_file_sessions_to_db,
+)
+from forwarder.runner import get_runner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,7 +62,33 @@ app.secret_key = SECRET_KEY
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
-# ─── Telegram bot helper ──────────────────────────────────────────────────────
+# ─── Telethon runner init ─────────────────────────────────────────────────────
+
+_runner = get_runner()
+_telethon_ready = False
+_telethon_error = ""
+
+
+def _init_telethon():
+    global _telethon_ready, _telethon_error
+    if not TELETHON_API_ID or not TELETHON_API_HASH:
+        _telethon_error = "TELETHON_API_ID / TELETHON_API_HASH not set"
+        return
+    session_path = os.path.join("forwarder_state", TELETHON_SESSION)
+    if not os.path.exists(session_path + ".session"):
+        _telethon_error = f"Session file not found: {session_path}.session — run: python3 forwarder/auth.py"
+        return
+    try:
+        client = _runner.init_client(TELETHON_API_ID, TELETHON_API_HASH,
+                                     TELETHON_SESSION, TELETHON_PHONE)
+        _telethon_ready = True
+        logger.info("Telethon client initialized (session file found)")
+    except Exception as e:
+        _telethon_error = str(e)
+        logger.warning(f"Telethon init: {e}")
+
+
+# ─── Telegram Bot helper (for media serving) ──────────────────────────────────
 
 _bot: Bot | None = None
 _bot_loop: asyncio.AbstractEventLoop | None = None
@@ -59,72 +103,81 @@ def get_bot() -> Bot | None:
 
 
 def run_async(coro):
-    """Run an async coroutine from a sync Flask context."""
     global _bot_loop
     if _bot_loop is None:
         _bot_loop = asyncio.new_event_loop()
     return _bot_loop.run_until_complete(coro)
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# ─── Startup ──────────────────────────────────────────────────────────────────
+
+with app.app_context():
+    init_db()
+    sync_file_sessions_to_db()
+    _init_telethon()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN PAGES
+# ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/")
 def dashboard():
     conn = get_conn()
     stats = {
-        "total_links": conn.execute(
-            "SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
-        "total_views": conn.execute(
-            "SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
-        "total_topics": conn.execute(
-            "SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
-        "total_forwards": conn.execute(
-            "SELECT COUNT(*) FROM forward_log").fetchone()[0],
+        "total_links":    conn.execute("SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
+        "total_views":    conn.execute("SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
+        "total_topics":   conn.execute("SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
+        "total_forwards": conn.execute("SELECT COUNT(*) FROM forward_log").fetchone()[0],
     }
+    try:
+        stats["fwd_sessions"] = conn.execute(
+            "SELECT COUNT(*) FROM fwd_sessions").fetchone()[0]
+    except Exception:
+        stats["fwd_sessions"] = 0
     conn.close()
-    recent_links = list_media_links(limit=5)
+    recent_links  = list_media_links(limit=5)
     recent_topics = list_topics(limit=5)
+    running_sessions = {k: v for k, v in _runner.all_statuses().items()
+                        if v.get("status") == "running"}
     return render_template(
         "dashboard.html",
         stats=stats,
         recent_links=recent_links,
         recent_topics=recent_topics,
-        base_url=BASE_URL
+        running_sessions=running_sessions,
+        base_url=BASE_URL,
+        telethon_ready=_telethon_ready,
+        telethon_error=_telethon_error,
     )
 
 
+# ─── Media ────────────────────────────────────────────────────────────────────
+
 @app.route("/media/<token>")
 def serve_media(token: str):
-    """
-    Main share-link endpoint.
-    Tries to get a direct file URL from Telegram CDN, then redirects.
-    Falls back to a download proxy.
-    """
     record = get_media_link(token)
     if not record:
         abort(404)
-
     bot = get_bot()
     if bot:
         try:
             tg_file = run_async(bot.get_file(record["file_id"]))
+            from flask import redirect
             return redirect(tg_file.file_path, code=302)
         except Exception as e:
             logger.error(f"Telegram get_file error: {e}")
-
-    # Fallback: stream from local media dir
     local_path = os.path.join(MEDIA_DIR, f"{token}.bin")
     if os.path.exists(local_path):
-        return send_file(local_path, mimetype=record.get("mime_type", "application/octet-stream"),
+        return send_file(local_path,
+                         mimetype=record.get("mime_type", "application/octet-stream"),
                          as_attachment=True,
                          download_name=record.get("file_name") or token)
-
     abort(503)
 
 
 @app.route("/media/<token>/info")
 def media_info(token: str):
-    """JSON info page for a share link."""
     record = get_media_link(token)
     if not record:
         abort(404)
@@ -156,20 +209,164 @@ def page_settings():
     if request.method == "POST":
         for k, v in request.form.items():
             if k.startswith("setting_"):
-                key = k[len("setting_"):]
-                set_setting(key, v)
+                set_setting(k[len("setting_"):], v)
         return redirect(url_for("page_settings"))
-    settings = all_settings()
-    return render_template("settings.html", settings=settings)
+    return render_template("settings.html", settings=all_settings())
 
 
-# ─── REST API ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# FORWARDER PAGES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/forwarder")
+def forwarder_dashboard():
+    sessions = db_list_sessions(limit=100)
+    live     = _runner.all_statuses()
+    # Merge live status into DB rows
+    for s in sessions:
+        if s["key"] in live:
+            s["live"] = live[s["key"]]
+        elif any(s["key"] == v.get("real_key") for v in live.values()):
+            for v in live.values():
+                if v.get("real_key") == s["key"]:
+                    s["live"] = v
+                    break
+        else:
+            s["live"] = None
+    return render_template(
+        "forwarder_dashboard.html",
+        sessions=sessions,
+        telethon_ready=_telethon_ready,
+        telethon_error=_telethon_error,
+    )
+
+
+@app.route("/forwarder/new")
+def forwarder_new():
+    if not _telethon_ready:
+        return render_template("forwarder_setup.html",
+                               telethon_error=_telethon_error)
+    return render_template("forwarder_new.html")
+
+
+@app.route("/forwarder/start", methods=["POST"])
+def forwarder_start():
+    if not _telethon_ready:
+        return jsonify({"ok": False, "error": "Telethon chưa sẵn sàng. " + _telethon_error}), 400
+
+    f = request.form
+    mode = f.get("mode", "forward")
+
+    cfg: dict = {
+        "src_raw":     f.get("src_raw", "").strip(),
+        "dst_raw":     f.get("dst_raw", "").strip(),
+        "only_filter": f.get("only_filter", "all"),
+        "hide_sender": f.get("hide_sender") == "on",
+        "webhook_url": f.get("webhook_url", "").strip(),
+    }
+
+    if not cfg["src_raw"] or not cfg["dst_raw"]:
+        return jsonify({"ok": False, "error": "Thiếu kênh nguồn hoặc đích"}), 400
+
+    if mode == "backup":
+        cfg["icon_mode"]    = f.get("icon_mode", "clone")
+        cfg["emoji_raw"]    = f.get("emoji_raw", "").strip()
+        cfg["skip_general"] = f.get("skip_general") == "on"
+    else:
+        cfg["start_msg_id"]   = int(f.get("start_msg_id") or 0) or None
+        cfg["force_topic_id"] = int(f.get("force_topic_id") or 0) or None
+        cfg["auto_topic"]     = f.get("auto_topic") == "on"
+
+    try:
+        tmp_key = _runner.start_session(cfg, mode=mode)
+        return redirect(url_for("forwarder_session", key=tmp_key))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/forwarder/session/<key>")
+def forwarder_session(key: str):
+    live = _runner.get_status(key)
+    if not live:
+        # Try real_key lookup
+        for v in _runner.all_statuses().values():
+            if v.get("real_key") == key:
+                live = v
+                break
+    # Fall back to DB
+    db_s = db_get_session(key)
+    return render_template("forwarder_session.html", key=key,
+                           live=live, db_session=db_s)
+
+
+@app.route("/forwarder/stop/<key>", methods=["POST"])
+def forwarder_stop(key: str):
+    _runner.stop_session(key)
+    return jsonify({"ok": True, "key": key, "status": "stopping"})
+
+
+@app.route("/forwarder/delete/<key>", methods=["POST"])
+def forwarder_delete(key: str):
+    _runner.stop_session(key)
+    db_delete_session(key)
+    return redirect(url_for("forwarder_dashboard"))
+
+
+# ─── SSE stream ───────────────────────────────────────────────────────────────
+
+@app.route("/forwarder/stream/<key>")
+def forwarder_stream(key: str):
+    """Server-Sent Events endpoint for real-time progress updates."""
+    def generate():
+        last_log_idx = 0
+        for _ in range(600):   # max 10 min at 1s interval
+            status = _runner.get_status(key)
+            if not status:
+                # Check by real_key
+                for v in _runner.all_statuses().values():
+                    if v.get("real_key") == key:
+                        status = v
+                        break
+
+            if status:
+                log = status.get("log", [])
+                new_lines = log[last_log_idx:]
+                last_log_idx = len(log)
+                payload = {
+                    "status":   status.get("status"),
+                    "progress": status.get("progress", {}),
+                    "log":      new_lines,
+                    "error":    status.get("error"),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                if status.get("status") in ("done", "error", "stopped"):
+                    yield "data: {\"status\":\"closed\"}\n\n"
+                    return
+            else:
+                yield f"data: {{\"status\":\"not_found\"}}\n\n"
+                return
+            time.sleep(1)
+        yield "data: {\"status\":\"timeout\"}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REST API
+# ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/links")
 def api_links():
-    limit = int(request.args.get("limit", 50))
+    limit  = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
-    links = list_media_links(limit=limit, offset=offset)
+    links  = list_media_links(limit=limit, offset=offset)
     return jsonify({"ok": True, "data": links, "count": len(links)})
 
 
@@ -181,31 +378,29 @@ def api_delete_link(token):
 
 @app.route("/api/topics")
 def api_topics():
-    topics = list_topics(limit=100)
-    return jsonify({"ok": True, "data": topics})
+    return jsonify({"ok": True, "data": list_topics(limit=100)})
 
 
 @app.route("/api/logs")
 def api_logs():
     limit = int(request.args.get("limit", 100))
-    logs = list_forward_logs(limit=limit)
-    return jsonify({"ok": True, "data": logs})
+    return jsonify({"ok": True, "data": list_forward_logs(limit=limit)})
 
 
 @app.route("/api/stats")
 def api_stats():
     conn = get_conn()
     data = {
-        "total_links": conn.execute(
-            "SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
-        "total_views": conn.execute(
-            "SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
-        "total_topics": conn.execute(
-            "SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
-        "total_forwards": conn.execute(
-            "SELECT COUNT(*) FROM forward_log").fetchone()[0],
-        "by_type": {}
+        "total_links":    conn.execute("SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
+        "total_views":    conn.execute("SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
+        "total_topics":   conn.execute("SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
+        "total_forwards": conn.execute("SELECT COUNT(*) FROM forward_log").fetchone()[0],
+        "by_type":        {},
     }
+    try:
+        data["fwd_sessions"] = conn.execute("SELECT COUNT(*) FROM fwd_sessions").fetchone()[0]
+    except Exception:
+        data["fwd_sessions"] = 0
     rows = conn.execute(
         "SELECT file_type, COUNT(*) as cnt FROM media_links GROUP BY file_type"
     ).fetchall()
@@ -220,6 +415,28 @@ def api_settings():
     for k, v in payload.items():
         set_setting(k, str(v))
     return jsonify({"ok": True})
+
+
+@app.route("/api/forwarder/sessions")
+def api_fwd_sessions():
+    sessions = db_list_sessions(limit=100)
+    live = _runner.all_statuses()
+    for s in sessions:
+        s["is_running"] = _runner.is_running(s["key"]) or any(
+            v.get("real_key") == s["key"] for v in live.values()
+        )
+    return jsonify({"ok": True, "data": sessions})
+
+
+@app.route("/api/forwarder/session/<key>")
+def api_fwd_session(key: str):
+    live = _runner.get_status(key) or {}
+    for v in _runner.all_statuses().values():
+        if v.get("real_key") == key:
+            live = v
+            break
+    db_s = db_get_session(key) or {}
+    return jsonify({"ok": True, "live": live, "db": db_s})
 
 
 # ─── Error handlers ───────────────────────────────────────────────────────────
@@ -237,5 +454,4 @@ def unavailable(e):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    init_db()
     app.run(host=WEB_HOST, port=WEB_PORT, debug=False)

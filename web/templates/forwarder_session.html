@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}Chi Tiết Phiên – Forwarder{% endblock %}
+{% block page_title %}📊 Chi Tiết Phiên{% endblock %}
+
+{% block content %}
+{% set status = (live.status if live else db_session.status) or 'unknown' %}
+{% set progress = (live.progress if live else db_session.progress) or {} %}
+{% set cfg = (live.cfg if live else db_session.cfg) or {} %}
+
+<!-- Status bar -->
+<div class="stat-card accent-{% if status == 'running' %}green{% elif status == 'done' %}blue{% elif status == 'error' %}orange{% else %}purple{% endif %}" style="margin-bottom:0">
+  <div class="stat-icon">
+    {% if status == 'running' %}▶️{% elif status == 'done' %}✅{% elif status == 'error' %}❌{% else %}⏸{% endif %}
+  </div>
+  <div class="stat-body">
+    <div class="stat-number">{{ status | upper }}</div>
+    <div class="stat-label">
+      {{ (db_session.src_name if db_session else cfg.get('src_raw','?')) }} → {{ (db_session.dst_name if db_session else cfg.get('dst_raw','?')) }}
+    </div>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+    {% if status == 'running' %}
+    <button class="btn btn-danger" onclick="stopSession()">⏹ Dừng</button>
+    {% endif %}
+    <a href="{{ url_for('forwarder_dashboard') }}" class="btn">↩️ Quay lại</a>
+  </div>
+</div>
+
+<!-- Progress stats -->
+<div class="stats-grid">
+  <div class="stat-card accent-green">
+    <div class="stat-icon">✅</div>
+    <div class="stat-body">
+      <div class="stat-number" id="stat-fwd">{{ progress.total_forwarded or 0 }}</div>
+      <div class="stat-label">Tin đã forward</div>
+    </div>
+  </div>
+  <div class="stat-card accent-purple">
+    <div class="stat-icon">📋</div>
+    <div class="stat-body">
+      <div class="stat-number" id="stat-topics">
+        {% if progress.topics_done is not none and progress.topics_total %}
+          {{ progress.topics_done }}/{{ progress.topics_total }}
+        {% else %}–{% endif %}
+      </div>
+      <div class="stat-label">Topics</div>
+    </div>
+  </div>
+  <div class="stat-card accent-orange">
+    <div class="stat-icon">❌</div>
+    <div class="stat-body">
+      <div class="stat-number" id="stat-errors">{{ progress.errors or 0 }}</div>
+      <div class="stat-label">Lỗi</div>
+    </div>
+  </div>
+  <div class="stat-card accent-blue">
+    <div class="stat-icon">⏭️</div>
+    <div class="stat-body">
+      <div class="stat-number" id="stat-skip">{{ progress.skipped or 0 }}</div>
+      <div class="stat-label">Bỏ qua</div>
+    </div>
+  </div>
+</div>
+
+<!-- Progress bar (backup mode) -->
+{% if progress.topics_total %}
+<div class="card" style="padding:20px">
+  <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <span><strong>Tiến độ clone topics</strong></span>
+    <span id="progress-pct">{{ ((progress.topics_done or 0) / progress.topics_total * 100) | int }}%</span>
+  </div>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar-fill" id="progress-bar"
+         style="width:{{ ((progress.topics_done or 0) / progress.topics_total * 100) | int }}%"></div>
+  </div>
+  <div style="margin-top:8px;color:var(--text-muted);font-size:13px" id="current-topic">
+    {% if progress.current_topic %}🗂 Đang xử lý: <strong>{{ progress.current_topic }}</strong>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Config summary -->
+<div class="card">
+  <div class="card-header"><h2 class="card-title">⚙️ Cấu Hình Phiên</h2></div>
+  <div class="form-grid">
+    <div class="form-group">
+      <label>Chế Độ</label>
+      <div class="form-control" style="cursor:default">
+        {{ '📦 Backup Forum' if (db_session.mode if db_session else '') == 'backup' else '📤 Forward Thường' }}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Kênh Nguồn</label>
+      <div class="form-control" style="cursor:default">{{ cfg.get('src_raw','–') }}</div>
+    </div>
+    <div class="form-group">
+      <label>Kênh Đích</label>
+      <div class="form-control" style="cursor:default">{{ cfg.get('dst_raw','–') }}</div>
+    </div>
+    <div class="form-group">
+      <label>Filter</label>
+      <div class="form-control" style="cursor:default">
+        {{ {'all':'Tất cả','media':'Chỉ media','video':'Chỉ video','photo':'Chỉ ảnh'}.get(cfg.get('only_filter','all'),'–') }}
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Ẩn tên</label>
+      <div class="form-control" style="cursor:default">{{ '🙈 Ẩn tên' if cfg.get('hide_sender') else '👁️ Hiện tên' }}</div>
+    </div>
+    {% if cfg.get('webhook_url') %}
+    <div class="form-group">
+      <label>Webhook</label>
+      <div class="form-control" style="cursor:default">{{ cfg.get('webhook_url') }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Live log -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">📜 Log Trực Tiếp</h2>
+    <div style="display:flex;gap:8px;align-items:center">
+      <label class="toggle" style="margin:0">
+        <input type="checkbox" id="autoScroll" checked />
+        <span class="toggle-slider"></span>
+        <span style="font-size:12px">Auto-scroll</span>
+      </label>
+      <button class="btn btn-sm" onclick="clearLog()">🗑️ Xóa</button>
+    </div>
+  </div>
+  <div id="logBox" class="log-box">
+    {% if live and live.log %}
+      {% for line in live.log %}
+      <div class="log-line">{{ line }}</div>
+      {% endfor %}
+    {% else %}
+      <div class="log-line text-muted">Đang chờ dữ liệu…</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SESSION_KEY = "{{ key }}";
+const SESSION_STATUS = "{{ status }}";
+
+async function stopSession() {
+  if (!confirm('Dừng phiên này?')) return;
+  await fetch(`/forwarder/stop/${SESSION_KEY}`, { method: 'POST' });
+  showToast('⏹ Đang dừng…');
+}
+
+function clearLog() {
+  document.getElementById('logBox').innerHTML = '';
+}
+
+// ── SSE real-time updates ──────────────────────────────────────────────────
+{% if status == 'running' or status == 'starting' %}
+const evtSource = new EventSource(`/forwarder/stream/${SESSION_KEY}`);
+
+evtSource.onmessage = function(e) {
+  const data = JSON.parse(e.data);
+
+  if (data.status === 'closed' || data.status === 'timeout' || data.status === 'not_found') {
+    evtSource.close();
+    if (data.status !== 'timeout') location.reload();
+    return;
+  }
+
+  // Update stats
+  const p = data.progress || {};
+  if (p.total_forwarded !== undefined)
+    document.getElementById('stat-fwd').textContent = p.total_forwarded;
+  if (p.errors !== undefined)
+    document.getElementById('stat-errors').textContent = p.errors;
+  if (p.skipped !== undefined)
+    document.getElementById('stat-skip').textContent = p.skipped;
+
+  if (p.topics_done !== undefined && p.topics_total) {
+    document.getElementById('stat-topics').textContent = `${p.topics_done}/${p.topics_total}`;
+    const pct = Math.round(p.topics_done / p.topics_total * 100);
+    const bar = document.getElementById('progress-bar');
+    const pctEl = document.getElementById('progress-pct');
+    if (bar) bar.style.width = pct + '%';
+    if (pctEl) pctEl.textContent = pct + '%';
+  }
+
+  if (p.current_topic) {
+    const el = document.getElementById('current-topic');
+    if (el) el.innerHTML = `🗂 Đang xử lý: <strong>${p.current_topic}</strong>`;
+  }
+
+  // Append log lines
+  const logBox = document.getElementById('logBox');
+  if (data.log && data.log.length) {
+    data.log.forEach(line => {
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      div.textContent = line;
+      logBox.appendChild(div);
+    });
+    if (document.getElementById('autoScroll').checked) {
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+  }
+
+  // Status changed
+  if (data.status === 'done' || data.status === 'error' || data.status === 'stopped') {
+    evtSource.close();
+    showToast(data.status === 'done' ? '✅ Phiên hoàn thành!' : '⚠️ Phiên kết thúc: ' + data.status, 5000);
+    setTimeout(() => location.reload(), 3000);
+  }
+};
+
+evtSource.onerror = function() {
+  evtSource.close();
+  showToast('⚠️ Mất kết nối SSE. Tự động tải lại…', 3000);
+  setTimeout(() => location.reload(), 3000);
+};
+{% endif %}
+</script>
+{% endblock %}

@@ -1,11 +1,13 @@
 """
-Launch both the Telegram bot and Flask web server in the same process.
+Unified launcher.
 
 Usage:
-  python run.py           # runs both bot + web
-  python run.py --bot     # bot only
-  python run.py --web     # web only
+  python3 run.py           – Bot + Web server (parallel)
+  python3 run.py --bot     – Telegram bot only
+  python3 run.py --web     – Web server only
+  python3 run.py --auth    – Telethon auth helper (one-time setup)
 """
+
 import sys
 import threading
 import logging
@@ -19,10 +21,12 @@ logger = logging.getLogger(__name__)
 
 def run_web():
     from database.models import init_db
+    from forwarder.state import sync_file_sessions_to_db
     from app import app
     from config.settings import WEB_HOST, WEB_PORT
     init_db()
-    logger.info(f"Web server starting on {WEB_HOST}:{WEB_PORT}")
+    sync_file_sessions_to_db()
+    logger.info(f"Web server → http://{WEB_HOST}:{WEB_PORT}")
     app.run(host=WEB_HOST, port=WEB_PORT, debug=False, use_reloader=False)
 
 
@@ -32,20 +36,28 @@ def run_bot():
     main()
 
 
+def run_auth():
+    import asyncio
+    from forwarder.auth import main
+    asyncio.run(main())
+
+
 def main():
     args = sys.argv[1:]
-    bot_only = "--bot" in args
-    web_only = "--web" in args
 
-    if web_only:
+    if "--auth" in args:
+        run_auth()
+        return
+
+    if "--web" in args:
         run_web()
         return
 
-    if bot_only:
+    if "--bot" in args:
         run_bot()
         return
 
-    # Both: run web in background thread, bot in foreground
+    # Default: both (web in background thread, bot in foreground)
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     logger.info("Web server thread started.")

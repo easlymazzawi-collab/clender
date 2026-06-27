@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Phiên Mới – Forwarder{% endblock %}
+{% block page_title %}➕ Tạo Phiên Forward Mới{% endblock %}
+
+{% block content %}
+<!-- Mode selector tabs -->
+<div class="tab-bar">
+  <button class="tab active" id="tab-forward" onclick="switchMode('forward')">📤 Forward Thường</button>
+  <button class="tab" id="tab-backup" onclick="switchMode('backup')">📦 Backup Forum</button>
+</div>
+
+<form method="POST" action="{{ url_for('forwarder_start') }}" id="sessionForm">
+  <input type="hidden" name="mode" id="modeInput" value="forward" />
+
+  <!-- Common fields -->
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">📡 Kênh Nguồn & Đích</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>📥 Kênh NGUỒN</label>
+        <input type="text" name="src_raw" class="form-control" required
+               placeholder="ID (-100…) / @username / https://t.me/c/…/123" />
+        <small>Chấp nhận: ID kênh, username, link tin nhắn bắt đầu, link topic</small>
+      </div>
+      <div class="form-group">
+        <label>📤 Kênh ĐÍCH</label>
+        <input type="text" name="dst_raw" class="form-control" required
+               placeholder="ID (-100…) / @username / https://t.me/…" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Forward options -->
+  <div class="card" id="section-forward">
+    <div class="card-header"><h2 class="card-title">⚙️ Tuỳ Chọn Forward</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>🔗 Bắt đầu từ Message ID</label>
+        <input type="number" name="start_msg_id" class="form-control"
+               placeholder="Để trống = từ đầu" min="0" />
+        <small>Hoặc dán link tin nhắn vào ô Nguồn, ID sẽ được parse tự động</small>
+      </div>
+      <div class="form-group">
+        <label>🗂 Giới hạn Topic ID</label>
+        <input type="number" name="force_topic_id" class="form-control"
+               placeholder="Để trống = tất cả topics" min="0" />
+        <small>Chỉ forward msg trong topic này</small>
+      </div>
+      <div class="form-group">
+        <label>🔄 Auto tạo topic ở kênh đích</label>
+        <label class="toggle">
+          <input type="checkbox" name="auto_topic" checked />
+          <span class="toggle-slider"></span>
+          <span>Bật — tự tạo topic nếu chưa có</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backup options -->
+  <div class="card hidden" id="section-backup">
+    <div class="card-header"><h2 class="card-title">📦 Tuỳ Chọn Backup Forum</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>🎨 Chế độ Icon Topic</label>
+        <select name="icon_mode" class="form-control" onchange="toggleEmojiInput(this.value)">
+          <option value="clone">Clone icon từ nguồn (khuyến nghị)</option>
+          <option value="fixed">Dùng 1 emoji cố định cho tất cả</option>
+          <option value="none">Chỉ title, không icon</option>
+        </select>
+      </div>
+      <div class="form-group" id="emoji-input-group" style="display:none">
+        <label>💎 Emoji ID hoặc link tin nhắn</label>
+        <input type="text" name="emoji_raw" class="form-control"
+               placeholder="https://t.me/… hoặc document_id (số)" />
+        <small>Dán link tin nhắn chứa emoji premium HOẶC document_id</small>
+      </div>
+      <div class="form-group">
+        <label>🏠 Bỏ qua General Topic</label>
+        <label class="toggle">
+          <input type="checkbox" name="skip_general" />
+          <span class="toggle-slider"></span>
+          <span>Tắt — forward cả General topic</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shared options -->
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">🎛 Tuỳ Chọn Chung</h2></div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>📌 Filter Nội Dung</label>
+        <select name="only_filter" class="form-control">
+          <option value="all">Tất cả (văn bản + media)</option>
+          <option value="media">Chỉ media (ảnh + video + file + audio)</option>
+          <option value="video">Chỉ video</option>
+          <option value="photo">Chỉ ảnh</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>🙈 Ẩn tên người gửi</label>
+        <label class="toggle">
+          <input type="checkbox" name="hide_sender" />
+          <span class="toggle-slider"></span>
+          <span>Tắt — giữ nguyên "Forwarded from…"</span>
+        </label>
+        <small>Bật = dùng drop_author, giữ 100% nội dung: emoji premium, format, album</small>
+      </div>
+      <div class="form-group">
+        <label>🔔 Webhook URL (khi xong)</label>
+        <input type="text" name="webhook_url" class="form-control"
+               placeholder="https://your-webhook.com/endpoint (tuỳ chọn)" />
+        <small>Bot sẽ POST JSON tóm tắt kết quả khi hoàn thành</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" id="submitBtn">▶️ Bắt Đầu Phiên</button>
+    <a href="{{ url_for('forwarder_dashboard') }}" class="btn">↩️ Quay Lại</a>
+  </div>
+</form>
+
+<!-- Info boxes -->
+<div class="grid-2col" style="margin-top:8px">
+  <div class="card info-card">
+    <div class="info-icon">💡</div>
+    <div>
+      <strong>Về Forward Thường:</strong>
+      Forward từ kênh/topic cụ thể, bắt đầu từ message ID chọn trước.
+      Hỗ trợ cả kênh thường và forum có topics.
+      State được lưu → có thể resume nếu gián đoạn.
+    </div>
+  </div>
+  <div class="card info-card">
+    <div class="info-icon">📦</div>
+    <div>
+      <strong>Về Backup Forum:</strong>
+      Clone toàn bộ cấu trúc forum (topics + icon/màu) rồi forward tất cả tin nhắn.
+      Batch 50 msg/call, album giữ nguyên grouped_id.
+      Chạy lại sẽ resume từ chỗ dừng, không forward lại msg cũ.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentMode = 'forward';
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('modeInput').value = mode;
+  document.getElementById('tab-forward').classList.toggle('active', mode === 'forward');
+  document.getElementById('tab-backup').classList.toggle('active', mode === 'backup');
+  document.getElementById('section-forward').classList.toggle('hidden', mode !== 'forward');
+  document.getElementById('section-backup').classList.toggle('hidden', mode !== 'backup');
+  document.getElementById('submitBtn').textContent =
+    mode === 'backup' ? '📦 Bắt Đầu Backup' : '▶️ Bắt Đầu Forward';
+}
+
+function toggleEmojiInput(val) {
+  document.getElementById('emoji-input-group').style.display =
+    val === 'fixed' ? '' : 'none';
+}
+
+// Toggle label text based on checkbox state
+document.querySelectorAll('.toggle input[type=checkbox]').forEach(cb => {
+  cb.addEventListener('change', function() {
+    const span = this.nextElementSibling.nextElementSibling;
+    if (!span) return;
+    const onText  = this.dataset.on  || 'Bật';
+    const offText = this.dataset.off || span.textContent.replace('Bật','Tắt').replace('Tắt','Bật');
+  });
+});
+
+document.getElementById('sessionForm').addEventListener('submit', function() {
+  document.getElementById('submitBtn').textContent = '⏳ Đang khởi động…';
+  document.getElementById('submitBtn').disabled = true;
+});
+</script>
+{% endblock %}

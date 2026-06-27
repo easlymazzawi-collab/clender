@@ -1,6 +1,10 @@
 # 🤖 Forum Converter Bot
 
-Hệ thống **chuyển đổi diễn đàn Telegram thông minh** – tự động clone chủ đề, tạo link chia sẻ media, forward có/ẩn tên, và quản trị qua web dashboard.
+Hệ thống **chuyển đổi diễn đàn Telegram thông minh** — gồm 2 thành phần:
+
+1. **Telethon Forwarder** — Clone toàn bộ forum (topics + messages) với tốc độ cao (batch 50 msg/call, album giữ grouped_id, resume được)
+2. **Telegram Bot** — Tạo link chia sẻ media, forward có/ẩn tên, auto-clone topics
+3. **Web Admin Dashboard** — Quản trị toàn bộ qua giao diện web dark theme
 
 ---
 
@@ -8,43 +12,37 @@ Hệ thống **chuyển đổi diễn đàn Telegram thông minh** – tự đ�
 
 ```
 forum-bot/
+├── forwarder/
+│   ├── __init__.py
+│   ├── auth.py          # CLI auth helper (chạy 1 lần)
+│   ├── core.py          # Telethon async forwarder (v2.5.8 compat)
+│   ├── runner.py        # Background session runner (thread + asyncio)
+│   └── state.py         # State persistence (file + SQLite mirror)
 ├── bot/
-│   ├── __init__.py
 │   ├── main.py          # Entry-point bot Telegram
-│   └── handlers.py      # Tất cả command & message handlers
-├── config/
-│   ├── __init__.py
-│   └── settings.py      # Đọc biến môi trường
-├── database/
-│   ├── __init__.py
-│   └── models.py        # SQLite models + helpers
-├── utils/
-│   ├── __init__.py
-│   ├── token.py         # Tạo token ngẫu nhiên
-│   └── thumbnail.py     # Trích xuất thumbnail video
+│   └── handlers.py      # Command & message handlers
+├── config/settings.py   # Đọc biến môi trường
+├── database/models.py   # SQLite WAL models
+├── utils/               # Token, thumbnail helpers
 ├── web/
-│   ├── static/
-│   │   ├── css/style.css
-│   │   └── js/app.js
-│   └── templates/
-│       ├── base.html
+│   ├── static/          # CSS + JS
+│   └── templates/       # Jinja2 templates
 │       ├── dashboard.html
-│       ├── links.html
-│       ├── topics.html
-│       ├── logs.html
-│       ├── settings.html
-│       ├── 404.html
-│       └── 503.html
-├── app.py               # Flask web server
-├── run.py               # Launcher (bot + web)
+│       ├── forwarder_dashboard.html   ← Quản lý phiên
+│       ├── forwarder_new.html         ← Tạo phiên mới
+│       ├── forwarder_session.html     ← Chi tiết + log trực tiếp (SSE)
+│       ├── forwarder_setup.html       ← Hướng dẫn auth Telethon
+│       ├── links.html, topics.html, logs.html, settings.html
+├── app.py               # Flask web server + REST API
+├── run.py               # Launcher tổng hợp
 ├── requirements.txt
 ├── .env.example
-└── README.md
+└── forwarder_state/     # State files + Telethon session (tự tạo)
 ```
 
 ---
 
-## ⚡ Cài đặt nhanh
+## ⚡ Cài đặt
 
 ### 1. Clone & cài dependencies
 
@@ -58,107 +56,116 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-nano .env   # điền BOT_TOKEN, ADMIN_IDS, DEST_FORUM_ID, BASE_URL
+# Điền đầy đủ các trường trong .env
 ```
 
-### 3. Chạy
+### 3. Xác thực Telethon (1 lần duy nhất)
 
 ```bash
-# Chạy cả bot lẫn web server
-python run.py
-
-# Chỉ chạy bot
-python run.py --bot
-
-# Chỉ chạy web server
-python run.py --web
+python3 run.py --auth
+# Nhập số điện thoại và OTP từ Telegram
+# Session được lưu vào: forwarder_state/session_main.session
 ```
 
-Truy cập web admin: **http://localhost:5000**
+### 4. Chạy
+
+```bash
+python3 run.py            # Bot + Web server (cùng lúc)
+python3 run.py --web      # Chỉ web server (port 5000)
+python3 run.py --bot      # Chỉ Telegram bot
+```
+
+**Web admin**: http://localhost:5000
 
 ---
 
-## 🤖 Lệnh Bot
+## ⚡ Telethon Forwarder (Tính năng chính)
 
-| Lệnh | Mô tả |
-|------|-------|
-| `/start` | Khởi động & xem hướng dẫn |
-| `/help` | Danh sách đầy đủ lệnh |
+### Chế độ Forward Thường
+- Forward từ kênh/topic cụ thể, bắt đầu từ message ID tuỳ chọn
+- Hỗ trợ kênh thường và forum với topics
+- **Ẩn tên** (drop_author): giữ 100% nội dung — emoji premium, bold/italic, album
+
+### Chế độ Backup Forum (Full Clone)
+**Phase 1: Clone Topics**
+- Clone toàn bộ topic structure
+- Hỗ trợ 3 chế độ icon: clone từ nguồn / emoji cố định / chỉ title
+- Skip General topic tuỳ chọn
+
+**Phase 2: Forward Messages**
+- Batch 50 msg/call → nhanh 10-20× so với từng msg
+- Album forward trong 1 call → giữ nguyên grouped_id ở forum đích
+- Lỗi permanent (MessageIdInvalid...) → skip thông minh, không dừng
+- FloodWait handling với retry tự động
+- **Resume**: chạy lại sẽ tiếp tục từ chỗ dừng, không forward lại msg cũ
+
+### Quản lý qua Web
+- Tạo phiên mới qua form web (không cần gõ lệnh)
+- Xem tiến độ real-time qua SSE (Server-Sent Events)
+- Progress bar, stats (msg forwarded, topics, lỗi, skip)
+- Live log stream
+- Dừng phiên, xóa phiên
+
+---
+
+## 🤖 Telegram Bot
+
+| Lệnh | Chức năng |
+|------|-----------|
+| `/start` | Khởi động + menu |
 | `/share` | Reply vào media → tạo link chia sẻ |
-| `/forward` | Reply → forward có tên đến forum đích |
-| `/fwd_anon` | Reply → forward **ẩn tên** đến forum đích |
-| `/clone_topic [tên]` | *(Admin)* Clone chủ đề hiện tại sang forum mới |
-| `/stats` | *(Admin)* Thống kê tổng quan |
-| `/links` | *(Admin)* Danh sách link gần đây |
-| `/del_link <token>` | *(Admin)* Xóa link chia sẻ |
-| `/settings` | *(Admin)* Xem cài đặt |
-| `/set <key> <value>` | *(Admin)* Đặt giá trị cài đặt |
+| `/forward` | Reply → forward **có tên** đến forum đích |
+| `/fwd_anon` | Reply → forward **ẩn tên** |
+| `/clone_topic [tên]` | *(Admin)* Clone topic sang forum mới |
+| `/stats`, `/links` | *(Admin)* Thống kê |
+| `/del_link <token>` | *(Admin)* Xóa link |
+| `/set <key> <value>` | *(Admin)* Cài đặt |
+
+**Gửi media trực tiếp** → bot tự tạo link + gửi thumbnail+link (video)
 
 ---
 
-## 🌟 Tính năng
+## 🔌 REST API
 
-### 📁 Chia sẻ Media qua Link
-- Gửi bất kỳ media nào (ảnh, video, file, âm thanh, sticker...) → bot tự tạo link
-- Link dạng: `https://yourdomain.com/media/<token>`
-- Khi click → redirect đến Telegram CDN (không lưu file trên server)
-- Đếm lượt truy cập cho mỗi link
-
-### 🎬 Xử lý Video
-- Tự động lấy thumbnail từ Telegram
-- Gửi thumbnail + nút "▶️ Xem video" thay vì gửi trực tiếp file lớn
-- Caption định dạng: `🔗 Nhấp vào link để xem: <url>`
-
-### 📋 Clone Chủ Đề (Topic)
-- Dùng `/clone_topic` trong topic nguồn → bot tạo topic mới ở forum đích
-- Mọi media gửi vào topic nguồn → tự động clone sang topic đích (dưới dạng thumbnail + link)
-- Giữ nguyên caption gốc + thêm link chia sẻ
-
-### ↩️ Forward Linh Hoạt
-- **Có tên** (`/forward`): Giữ nguyên thông tin người gửi gốc
-- **Ẩn tên** (`/fwd_anon`): Copy nội dung mà không hiện tên người gửi
-
-### 🌐 Web Admin Dashboard
-- Tổng quan thống kê (links, views, topics, forwards)
-- Biểu đồ hoạt động + phân loại media
-- Quản lý link chia sẻ (xem, copy, xóa)
-- Quản lý chủ đề đã clone
-- Lịch sử forward (lọc theo chế độ/trạng thái)
-- Cài đặt bot trực tiếp qua giao diện
-
-### 🔌 REST API
 ```
-GET  /api/stats          Thống kê tổng quan
-GET  /api/links          Danh sách link
-DELETE /api/links/<tok>  Xóa link
-GET  /api/topics         Danh sách chủ đề
-GET  /api/logs           Lịch sử forward
-POST /api/settings       Cập nhật cài đặt
+GET    /api/stats                   Thống kê tổng quan
+GET    /api/links                   Danh sách link chia sẻ
+DELETE /api/links/<token>           Xóa link
+GET    /api/topics                  Chủ đề Bot đã clone
+GET    /api/logs                    Lịch sử forward Bot
+POST   /api/settings                Cập nhật cài đặt
+GET    /api/forwarder/sessions      Danh sách phiên Telethon
+GET    /api/forwarder/session/<key> Chi tiết phiên
+GET    /media/<token>               Serve media (→ Telegram CDN)
+GET    /forwarder/stream/<key>      SSE progress stream
 ```
 
 ---
 
-## 🔧 Yêu cầu
+## 🔧 Yêu cầu hệ thống
 
 - Python 3.11+
-- Bot phải là **Admin** trong cả forum nguồn và forum đích
+- Telethon: API ID + API Hash từ [my.telegram.org/apps](https://my.telegram.org/apps)
+- Bot phải là **Admin** trong cả forum nguồn và forum đích (cho Bot forward)
+- Telethon account phải là **Admin** hoặc có quyền đọc trong forum nguồn
 - Forum đích phải bật **Topics** (Supergroup với forum mode)
-- (Tùy chọn) `ffmpeg` để trích xuất thumbnail từ video local
 
 ---
 
-## 🚀 Deploy với Gunicorn
+## 🚀 Deploy Production
 
 ```bash
 # Web server
 gunicorn -w 2 -b 0.0.0.0:5000 app:app
 
-# Bot (chạy song song)
-python run.py --bot
+# Bot (riêng process)
+python3 run.py --bot
+
+# Hoặc dùng systemd / supervisor để quản lý
 ```
 
 ---
 
 ## 📜 Giấy phép
 
-MIT – Tự do sử dụng, chỉnh sửa, phân phối.
+MIT — Tự do sử dụng, chỉnh sửa, phân phối.

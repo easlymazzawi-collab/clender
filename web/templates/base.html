@@ -16,17 +16,28 @@
       <span class="brand-name">Forum Bot</span>
     </div>
     <nav class="sidebar-nav">
+      <div class="nav-section-label">Tổng Quan</div>
       <a href="{{ url_for('dashboard') }}" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
-        <span class="nav-icon">📊</span> Tổng Quan
+        <span class="nav-icon">📊</span> Dashboard
       </a>
+
+      <div class="nav-section-label">⚡ Forwarder</div>
+      <a href="{{ url_for('forwarder_dashboard') }}" class="nav-item {% if 'forwarder' in request.endpoint %}active{% endif %}">
+        <span class="nav-icon">📤</span> Quản Lý Phiên
+      </a>
+      <a href="{{ url_for('forwarder_new') }}" class="nav-item">
+        <span class="nav-icon">➕</span> Phiên Mới
+      </a>
+
+      <div class="nav-section-label">🤖 Bot Link</div>
       <a href="{{ url_for('page_links') }}" class="nav-item {% if request.endpoint == 'page_links' %}active{% endif %}">
         <span class="nav-icon">🔗</span> Danh Sách Link
       </a>
       <a href="{{ url_for('page_topics') }}" class="nav-item {% if request.endpoint == 'page_topics' %}active{% endif %}">
-        <span class="nav-icon">📋</span> Chủ Đề
+        <span class="nav-icon">📋</span> Chủ Đề Bot
       </a>
       <a href="{{ url_for('page_logs') }}" class="nav-item {% if request.endpoint == 'page_logs' %}active{% endif %}">
-        <span class="nav-icon">📜</span> Lịch Sử Forward
+        <span class="nav-icon">📜</span> Lịch Sử
       </a>
       <a href="{{ url_for('page_settings') }}" class="nav-item {% if request.endpoint == 'page_settings' %}active{% endif %}">
         <span class="nav-icon">⚙️</span> Cài Đặt
