@@ -96,6 +96,21 @@ def _file_name_of(msg: Message) -> Optional[str]:
 
 # ─── Thumbnail download ───────────────────────────────────────────────────────
 
+import io as _io
+
+
+def _photo_bio(data: bytes, name: str = "photo.jpg") -> _io.BytesIO:
+    """
+    Wrap raw bytes in a BytesIO with a .jpg name.
+    Telethon uses the file name/extension to decide whether to send as
+    a compressed photo or a document. Without a name it defaults to document.
+    """
+    bio = _io.BytesIO(data)
+    bio.name = name
+    bio.seek(0)
+    return bio
+
+
 async def _dl(client: TelegramClient, msg, **kwargs) -> Optional[bytes]:
     """
     Download media to bytes. Works with Telethon 1.36+.
@@ -206,13 +221,15 @@ async def send_as_link(
 
     try:
         if ftype in ("video", "animation", "video_note"):
-            # Thumbnail + link
+            # Send thumbnail as compressed photo + link caption
             thumb_bytes = await _download_thumb(client, msg)
             if thumb_bytes:
                 return await client.send_file(
-                    file=thumb_bytes, caption=full_cap[:1024], **kw
+                    file=_photo_bio(thumb_bytes, "thumb.jpg"),
+                    caption=full_cap[:1024],
+                    force_document=False,
+                    **kw,
                 )
-            # No thumbnail → text only
             fname = _file_name_of(msg) or "video"
             return await client.send_message(
                 message=f"🎬 **{fname}**\n\n{full_cap[:4096]}", **kw
@@ -222,7 +239,10 @@ async def send_as_link(
             photo_bytes = await _dl(client, msg)
             if photo_bytes:
                 return await client.send_file(
-                    file=photo_bytes, caption=full_cap[:1024], **kw
+                    file=_photo_bio(photo_bytes),
+                    caption=full_cap[:1024],
+                    force_document=False,
+                    **kw,
                 )
             return await client.send_message(
                 message=f"🖼️\n\n{full_cap[:4096]}", **kw
@@ -300,13 +320,13 @@ async def send_album_as_links(
         if ftype == "photo":
             data = await _dl(client, msg)
             if data:
-                visual_bytes.append(data)
+                visual_bytes.append(_photo_bio(data, "photo.jpg"))
             # If download fails → skip (link in caption covers it, no URL spam)
 
         elif ftype in ("video", "animation", "video_note"):
             data = await _download_thumb(client, msg)
             if data:
-                visual_bytes.append(data)
+                visual_bytes.append(_photo_bio(data, "thumb.jpg"))
             # If no thumbnail → skip (link in caption covers it)
 
         else:
@@ -329,7 +349,10 @@ async def send_album_as_links(
         captions_list = [""] * (len(visual_bytes) - 1) + [final_cap]
         try:
             result = await client.send_file(
-                file=visual_bytes, caption=captions_list, **kw
+                file=visual_bytes,
+                caption=captions_list,
+                force_document=False,   # send as compressed photo, not file
+                **kw,
             )
             if isinstance(result, list):
                 sent_msgs.extend(r for r in result if r)
@@ -340,7 +363,8 @@ async def send_album_as_links(
             # Fallback: send first visual item with full caption
             try:
                 s = await client.send_file(
-                    file=visual_bytes[0], caption=final_cap, **kw
+                    file=visual_bytes[0], caption=final_cap,
+                    force_document=False, **kw
                 )
                 sent_msgs.append(s)
             except Exception as e2:
