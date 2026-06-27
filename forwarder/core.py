@@ -28,7 +28,10 @@ from .state import (
     save_session_meta, db_set_session_progress,
     make_key, STATE_DIR,
 )
-from .link_sender import send_as_link, send_album_as_links, _media_type_of
+from .link_sender import (
+    store_album_token, store_single_token,
+    _build_caption, _get_caption, _media_type_of, _edit_caption,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -655,29 +658,35 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         pending_album["gid"]  = None
         pending_album["msgs"] = []
 
-        # ── Link mode: gửi toàn bộ album thành 1 media group + links ───────────
+        # ── Link mode: forward nguyên album + edit caption cuối để thêm link ────
         if link_mode:
             flush_skip_log(first_id - 1)
             try:
-                sent_list = await send_album_as_links(
-                    client, album,
-                    dst_entity.id,
-                    dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
-                    caption_tpl,
-                )
-                n_sent = len([s for s in sent_list if s])
-                if n_sent:
-                    # Map each album item to the LAST sent message (whole album = 1 link)
-                    last_sent = next((s for s in reversed(sent_list) if s), None)
-                    if last_sent:
+                # 1. Tạo token (1 token cho cả album)
+                orig_cap = next((_get_caption(m) for m in album if _get_caption(m)), "")
+                token, url = store_album_token(album)
+                full_cap   = _build_caption(orig_cap, url, caption_tpl)
+
+                # 2. Forward album nguyên vẹn (giữ cấu trúc album)
+                result = await send_msgs(client, album, dst_entity, hide_sender,
+                                         dst_topic_id, src_peer, dst_peer)
+
+                # 3. Lấy ID message cuối trong album đích → edit caption
+                new_ids = sorted(_parse_new_ids_from_updates(result)) if result else []
+                if new_ids:
+                    last_dst_id = new_ids[-1]
+                    await _edit_caption(client, dst_entity, last_dst_id, full_cap)
+                    # Build id_map for pinning
+                    if len(new_ids) == len(album):
+                        for m, d in zip(album, new_ids):
+                            id_map[m.id] = d
+                    else:
                         for m in album:
-                            id_map[m.id] = last_sent.id
-                    count += n
-                    stats["album"] += 1
-                    stats["links_created"] = stats.get("links_created", 0) + n
-                else:
-                    skipped += n
-                    stats["skipped"] += n
+                            id_map[m.id] = last_dst_id
+
+                count += n
+                stats["album"] += 1
+                stats["links_created"] = stats.get("links_created", 0) + 1
                 last_id_buf = last_mid
                 save_last_id(topic_state_key, last_id_buf)
                 consecutive_errors = 0
@@ -793,23 +802,39 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         if only_filter == "photo" and not msg.photo:
             _skip_media(); continue
 
-        # ── Link mode: send each message as share-link ────────────────────────
+        # ── Link mode: forward message + edit caption để thêm link ──────────────
         if link_mode:
             try:
                 flush_skip_log(msg.id - 1)
-                sent = await send_as_link(
-                    client, msg,
-                    dst_entity.id, dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
-                    caption_tpl,
-                )
-                if sent:
-                    id_map[msg.id] = sent.id   # track for pinning
+                ftype = _media_type_of(msg)
+                if ftype:
+                    # Tạo token và forward nguyên message
+                    orig_cap = _get_caption(msg)
+                    token, url = store_single_token(msg)
+                    full_cap   = _build_caption(orig_cap, url, caption_tpl)
+
+                    result = await send_msgs(client, [msg], dst_entity, hide_sender,
+                                             dst_topic_id, src_peer, dst_peer)
+
+                    new_ids = sorted(_parse_new_ids_from_updates(result)) if result else []
+                    if new_ids:
+                        dst_id = new_ids[-1]
+                        await _edit_caption(client, dst_entity, dst_id, full_cap)
+                        id_map[msg.id] = dst_id
+
                     count += 1
                     stats["normal"] += 1
                     stats["links_created"] = stats.get("links_created", 0) + 1
                 else:
-                    skipped += 1
-                    stats["skipped"] += 1
+                    # Text message — forward as-is
+                    result = await send_msgs(client, [msg], dst_entity, hide_sender,
+                                             dst_topic_id, src_peer, dst_peer)
+                    new_ids = sorted(_parse_new_ids_from_updates(result)) if result else []
+                    if new_ids:
+                        id_map[msg.id] = new_ids[-1]
+                    count += 1
+                    stats["normal"] += 1
+
                 last_id_buf = msg.id
                 save_last_id(topic_state_key, last_id_buf)
                 consecutive_errors = 0
@@ -817,7 +842,7 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                     progress_cb({"phase": "forward",
                                  "total_forwarded": count + stats.get("_base", 0),
                                  "links_created": stats.get("links_created", 0)})
-                await asyncio.sleep(0.3)   # gentle rate-limit for downloads
+                await asyncio.sleep(0.1)
             except FloodWaitError as e:
                 stats["flood_wait"] = stats.get("flood_wait", 0) + 1
                 await asyncio.sleep(e.seconds + 2)
@@ -935,20 +960,20 @@ async def run_session(client: TelegramClient, cfg: dict,
         pending_album["dst_topic"] = None
 
         if link_mode:
-            # Gửi toàn album thành 1 media group + links gộp trong caption
+            # Forward album nguyên vẹn + edit caption cuối để thêm link
             try:
-                sent_list = await send_album_as_links(
-                    client, album,
-                    dst_entity.id,
-                    dt if dt and dt != 1 else None,
-                    caption_tpl,
-                )
                 n = len(album)
-                n_sent = len([s for s in sent_list if s])
-                if n_sent:
-                    count += n
-                    stats["album"] += 1
-                    stats["links_created"] = stats.get("links_created", 0) + n
+                orig_cap = next((_get_caption(m) for m in album if _get_caption(m)), "")
+                token, url = store_album_token(album)
+                full_cap   = _build_caption(orig_cap, url, caption_tpl)
+                result = await send_msgs(client, album, dst_entity, hide_sender,
+                                         dt, src_peer, dst_peer)
+                new_ids = sorted(_parse_new_ids_from_updates(result)) if result else []
+                if new_ids:
+                    await _edit_caption(client, dst_entity, new_ids[-1], full_cap)
+                count += n
+                stats["album"] += 1
+                stats["links_created"] = stats.get("links_created", 0) + 1
                 last_id_buf = album[-1].id
             except Exception as e:
                 stats["errors"] += 1
@@ -1017,20 +1042,21 @@ async def run_session(client: TelegramClient, cfg: dict,
             if pending_album["msgs"]:
                 await flush_pending()
 
-            # ── Link mode: create share link instead of forwarding ────────────
+            # ── Link mode: forward + edit caption ────────────────────────────────
             if link_mode and _media_type_of(msg):
-                sent = await send_as_link(
-                    client, msg,
-                    dst_entity.id,
-                    dst_topic if dst_topic and dst_topic != 1 else None,
-                    caption_tpl,
-                )
-                if sent:
-                    count += 1
-                    stats["normal"] += 1
-                    stats["links_created"] = stats.get("links_created", 0) + 1
+                orig_cap = _get_caption(msg)
+                token, url = store_single_token(msg)
+                full_cap   = _build_caption(orig_cap, url, caption_tpl)
+                result = await send_msgs(client, [msg], dst_entity, hide_sender,
+                                         dst_topic, src_peer, dst_peer)
+                new_ids = sorted(_parse_new_ids_from_updates(result)) if result else []
+                if new_ids:
+                    await _edit_caption(client, dst_entity, new_ids[-1], full_cap)
+                    id_map[msg.id] = new_ids[-1]
+                count += 1
+                stats["normal"] += 1
+                stats["links_created"] = stats.get("links_created", 0) + 1
                 last_id_buf = msg.id
-                await asyncio.sleep(0.3)
             else:
                 await send_msgs(client, [msg], dst_entity, hide_sender, dst_topic, src_peer, dst_peer)
                 count += 1
