@@ -36,7 +36,9 @@ CLONE_DELAY_SECONDS = float(os.getenv("CLONE_DELAY_SECONDS", "1.5"))
 THUMBNAIL_QUALITY   = int(os.getenv("THUMBNAIL_QUALITY", "85"))
 
 # ─── Link caption template ────────────────────────────────────────────────────
+# python-dotenv reads \n as literal two chars, not a newline.
+# Replace \\n → real newline so templates in .env work correctly.
 LINK_CAPTION_TEMPLATE = os.getenv(
     "LINK_CAPTION_TEMPLATE",
     "🔗 Nhấp vào link để xem:\n{url}"
-)
+).replace("\\n", "\n")

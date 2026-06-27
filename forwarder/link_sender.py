@@ -182,8 +182,8 @@ def _make_single_token(msg: Message) -> tuple[str, str]:
 
 def _build_caption(orig_cap: str, url: str, template: Optional[str]) -> str:
     """Combine original caption + link line."""
-    tpl      = template or LINK_CAPTION_TEMPLATE
-    link_line = tpl.format(url=url)
+    tpl = (template or LINK_CAPTION_TEMPLATE).replace("\\n", "\n")
+    link_line = tpl.format(url=url.strip())   # strip any stray whitespace from url
     if orig_cap:
         return f"{orig_cap}\n\n{link_line}"
     return link_line
