@@ -45,28 +45,43 @@ def parse_link(raw: str) -> dict:
     raw = raw.strip()
     result = {"channel_raw": raw, "message_id": None, "topic_id": None}
 
+    # t.me/c/CHANNEL/TOPIC/MSG (forum private)
     m = re.search(r't\.me/c/(\d+)/(\d+)/(\d+)', raw)
     if m:
         result["channel_raw"] = f"-100{m.group(1)}"
         result["topic_id"]    = int(m.group(2))
         result["message_id"]  = int(m.group(3))
         return result
+    # t.me/c/CHANNEL/MSG (private channel)
     m = re.search(r't\.me/c/(\d+)/(\d+)', raw)
     if m:
         result["channel_raw"] = f"-100{m.group(1)}"
         result["message_id"]  = int(m.group(2))
         return result
-    m = re.search(r't\.me/([^/]+)/(\d+)/(\d+)', raw)
+    # t.me/c/CHANNEL (chỉ channel, không msg)
+    m = re.search(r't\.me/c/(\d+)/?$', raw)
+    if m:
+        result["channel_raw"] = f"-100{m.group(1)}"
+        return result
+    # t.me/username/TOPIC/MSG (forum public)
+    m = re.search(r't\.me/([A-Za-z]\w{3,31})/(\d+)/(\d+)', raw)
     if m:
         result["channel_raw"] = m.group(1)
         result["topic_id"]    = int(m.group(2))
         result["message_id"]  = int(m.group(3))
         return result
-    m = re.search(r't\.me/([^/]+)/(\d+)$', raw)
+    # t.me/username/MSG (public channel)
+    m = re.search(r't\.me/([A-Za-z]\w{3,31})/(\d+)/?$', raw)
     if m:
         result["channel_raw"] = m.group(1)
         result["message_id"]  = int(m.group(2))
         return result
+    # t.me/username (chỉ channel)
+    m = re.search(r't\.me/([A-Za-z]\w{3,31})/?$', raw)
+    if m:
+        result["channel_raw"] = m.group(1)
+        return result
+    # Không phải link → ID hoặc username thuần
     return result
 
 

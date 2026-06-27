@@ -264,19 +264,28 @@ def forwarder_start():
     if not _telethon_ready:
         return jsonify({"ok": False, "error": "Telethon chưa sẵn sàng. " + _telethon_error}), 400
 
+    from forwarder.core import parse_link
+
     f = request.form
     mode = f.get("mode", "forward")
 
+    src_in = f.get("src_raw", "").strip()
+    dst_in = f.get("dst_raw", "").strip()
+    if not src_in or not dst_in:
+        return jsonify({"ok": False, "error": "Thiếu kênh nguồn hoặc đích"}), 400
+
+    # Parse link → tách channel ID + topic_id + message_id
+    # (chấp nhận cả link đầy đủ https://t.me/c/.../.../... lẫn ID/username)
+    src_parsed = parse_link(src_in)
+    dst_parsed = parse_link(dst_in)
+
     cfg: dict = {
-        "src_raw":     f.get("src_raw", "").strip(),
-        "dst_raw":     f.get("dst_raw", "").strip(),
+        "src_raw":     src_parsed["channel_raw"],   # đã sạch (chỉ ID/username)
+        "dst_raw":     dst_parsed["channel_raw"],
         "only_filter": f.get("only_filter", "all"),
         "hide_sender": f.get("hide_sender") == "on",
         "webhook_url": f.get("webhook_url", "").strip(),
     }
-
-    if not cfg["src_raw"] or not cfg["dst_raw"]:
-        return jsonify({"ok": False, "error": "Thiếu kênh nguồn hoặc đích"}), 400
 
     # Link mode (shared between both modes)
     cfg["link_mode"]        = f.get("link_mode") == "on"
@@ -288,8 +297,12 @@ def forwarder_start():
         cfg["skip_general"] = f.get("skip_general") == "on"
         cfg["clone_pins"]   = f.get("clone_pins") == "on"
     else:
-        cfg["start_msg_id"]   = int(f.get("start_msg_id") or 0) or None
-        cfg["force_topic_id"] = int(f.get("force_topic_id") or 0) or None
+        # Forward mode: lấy start_msg_id / topic từ link nguồn nếu có,
+        # ưu tiên giá trị nhập tay trong form
+        form_start = int(f.get("start_msg_id") or 0) or None
+        form_topic = int(f.get("force_topic_id") or 0) or None
+        cfg["start_msg_id"]   = form_start or src_parsed.get("message_id")
+        cfg["force_topic_id"] = form_topic or src_parsed.get("topic_id")
         cfg["auto_topic"]     = f.get("auto_topic") == "on"
 
     try:
