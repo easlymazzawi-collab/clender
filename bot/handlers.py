@@ -41,6 +41,7 @@ from config.settings import (
     ADMIN_IDS, DEST_FORUM_ID, BASE_URL, LINK_CAPTION_TEMPLATE,
     CLONE_DELAY_SECONDS, BOT_USERNAME, MAX_FILE_SIZE_MB,
 )
+from bot.membership import gate, invalidate as invalidate_membership_cache
 from database.models import (
     create_media_link, get_media_link, list_media_links,
     delete_media_link, upsert_topic, list_topics,
@@ -206,14 +207,20 @@ async def create_link_for_message(msg, uploader_id, uploader_name) -> str | None
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # Deep link: /start TOKEN
+    # Deep link: /start TOKEN — check membership even for deep links
     if ctx.args:
         token = ctx.args[0].strip()
+        if not await gate(update, ctx):
+            return
         album = get_media_album(token)
         if album:
             await _serve_album(update, ctx, album)
             return
         await update.message.reply_text("❌ Link không hợp lệ hoặc đã hết hạn.")
+        return
+
+    # Normal /start — show join prompt if not a member, else welcome
+    if not await gate(update, ctx):
         return
 
     mode = _get_upload_mode()
@@ -306,6 +313,8 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
     mode = _get_upload_mode()
     mode_text = {"all": "Tất cả mọi người", "admin": "Chỉ Admin",
                  "whitelist": "Danh sách được phép"}.get(mode, mode)
@@ -348,6 +357,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_mylinks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
     user_id = update.effective_user.id
     conn = __import__("database.models", fromlist=["get_conn"]).get_conn()
     rows = conn.execute(
@@ -381,6 +392,8 @@ async def cmd_mylinks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_share(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
     user = update.effective_user
     allowed, reason = can_upload(user.id)
     if not allowed:
@@ -432,6 +445,8 @@ async def cmd_share(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
     if not update.message.reply_to_message:
         await update.message.reply_text(
             "↩️ Hãy *reply* vào tin nhắn muốn forward rồi dùng /forward",
@@ -464,6 +479,8 @@ async def cmd_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_fwd_anon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await gate(update, ctx):
+        return
     if not update.message.reply_to_message:
         await update.message.reply_text(
             "↩️ Hãy *reply* vào tin nhắn muốn forward ẩn danh rồi dùng /fwd\\_anon",
@@ -636,14 +653,20 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     s = all_settings()
     lines = "\n".join(f"• `{k}` = `{v}`" for k, v in s.items()) if s else "_Chưa có_"
+    fj_channel = get_setting("force_join_channel", "") or "_(tắt)_"
+    fj_sec     = get_setting("force_join_check_sec", "300")
     await update.message.reply_text(
         "⚙️ *Cài đặt hiện tại:*\n\n" + lines + "\n\n"
         "*Các key hữu ích:*\n"
         "• `upload_mode` = `all` / `admin` / `whitelist`\n"
         "• `max_file_mb` = số MB tối đa (mặc định 50)\n"
         "• `rate_limit` = số upload/giờ (0=không giới hạn)\n"
-        "• `caption_template` = mẫu caption link\n\n"
-        "Dùng /set để thay đổi",
+        "• `caption_template` = mẫu caption link\n"
+        "• `force_join_channel` = kênh bắt buộc\n"
+        "• `force_join_check_sec` = giây giữa 2 lần check thành viên\n"
+        "• `force_join_message` = tin nhắn khi chưa vào kênh\n\n"
+        f"📢 *Force-Join:* `{fj_channel}` (check mỗi `{fj_sec}` giây)\n\n"
+        "Dùng /forcejoin để cài đặt nhanh.",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -697,6 +720,50 @@ async def cmd_disallow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_forcejoin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /forcejoin @channel | off — configure force-join requirement."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Bạn không có quyền.")
+        return
+
+    if not ctx.args:
+        current = get_setting("force_join_channel", "") or "_(tắt)_"
+        check   = get_setting("force_join_check_sec", "300")
+        await update.message.reply_text(
+            "📢 *Cài đặt Force-Join:*\n\n"
+            f"• Kênh: `{current}`\n"
+            f"• Kiểm tra lại mỗi: `{check}` giây\n\n"
+            "*Lệnh:*\n"
+            "• `/forcejoin @kenhcuaban` – bật & đặt kênh\n"
+            "• `/forcejoin off` – tắt\n"
+            "• `/set force_join_check_sec 600` – check 10 phút/lần",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    val = ctx.args[0].strip()
+    if val.lower() in ("off", "0", "none", "tắt"):
+        set_setting("force_join_channel", "")
+        await update.message.reply_text(
+            "✅ Đã tắt yêu cầu tham gia kênh.\n"
+            "Mọi người đều dùng bot được."
+        )
+    else:
+        # Ensure starts with @ or is numeric ID
+        if not val.startswith("@") and not val.lstrip("-").isdigit():
+            val = "@" + val
+        set_setting("force_join_channel", val)
+        check_sec = get_setting("force_join_check_sec", "300")
+        await update.message.reply_text(
+            f"✅ *Đã bật Force-Join!*\n\n"
+            f"📢 Kênh bắt buộc: `{val}`\n"
+            f"⏱️ Kiểm tra lại mỗi: `{check_sec}` giây\n\n"
+            "⚠️ Đảm bảo bot là **Admin** trong kênh đó\n"
+            "để có thể kiểm tra thành viên.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+
 async def cmd_whitelist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("🚫 Bạn không có quyền.")
@@ -722,6 +789,10 @@ async def cmd_whitelist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg  = update.message
     if not msg:
+        return
+
+    # Membership gate first (re-checks every N seconds, catches members who left)
+    if not await gate(update, ctx):
         return
 
     user = update.effective_user
@@ -846,7 +917,27 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data
+    user = update.effective_user
 
+    # ── "Tôi đã tham gia — kiểm tra lại" button ──────────────────────────────
+    if data == "check_membership":
+        # Force re-check by clearing cache for this user
+        invalidate_membership_cache(user.id)
+        from bot.membership import check_user
+        ok = await check_user(ctx.bot, user.id)
+        if ok:
+            await q.message.edit_text(
+                "✅ Xác nhận thành công! Bạn đã là thành viên.\n"
+                "Dùng /start để bắt đầu.",
+            )
+        else:
+            await q.answer(
+                "❌ Bạn vẫn chưa tham gia kênh. Hãy tham gia rồi nhấn lại.",
+                show_alert=True
+            )
+        return
+
+    # ── Help inline buttons ────────────────────────────────────────────────────
     texts = {
         "help_share": (
             "📁 *Chia sẻ Media:*\n\n"
