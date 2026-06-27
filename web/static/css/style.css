@@ -472,6 +472,14 @@ pre.code-block { margin: 6px 0; }
 }
 .link-mode-table tr:last-child td { border-bottom: none; }
 .link-mode-table td:first-child { white-space: nowrap; }
+.link-mode-flow { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.flow-step {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg2); border-radius: 8px; padding: 8px 12px;
+  font-size: 13px; border: 1px solid var(--border);
+}
+.flow-icon { font-size: 18px; min-width: 24px; text-align: center; }
+.flow-arrow { text-align: center; color: var(--accent); font-size: 18px; line-height: 1; }
 
 /* ─── Misc ────────────────────────────────────────────────────────────────── */
 .text-muted { color: var(--text-muted); }

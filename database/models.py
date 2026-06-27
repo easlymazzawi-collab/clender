@@ -1,7 +1,8 @@
 """
 SQLite database models using raw sqlite3.
 Tables:
-  - media_links   : maps unique token → Telegram file_id + metadata
+  - media_links   : maps unique token → Telegram file_id + metadata (web links)
+  - media_albums  : maps unique token → album of (src_chat_id + msg_ids) for bot deep links
   - topics        : cloned topic mapping between forums
   - forward_log   : log every forwarded/cloned message
   - settings      : key/value admin settings
@@ -75,7 +76,22 @@ def init_db() -> None:
             updated_at DATETIME DEFAULT (datetime('now'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_media_token ON media_links(token);
+        -- Bot deep-link albums: token → original source chat + message IDs
+        -- When user clicks t.me/bot?start=TOKEN, bot copies these messages to user.
+        CREATE TABLE IF NOT EXISTS media_albums (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            token        TEXT    UNIQUE NOT NULL,
+            src_chat_id  INTEGER NOT NULL,
+            src_msg_ids  TEXT    NOT NULL,   -- JSON array of message IDs e.g. [101,102,103]
+            caption      TEXT,               -- original caption of the album
+            thumb_file_id TEXT,              -- file_id of thumbnail for the destination post
+            created_at   DATETIME DEFAULT (datetime('now')),
+            access_count INTEGER  DEFAULT 0,
+            is_active    INTEGER  DEFAULT 1
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_media_token  ON media_links(token);
+        CREATE INDEX IF NOT EXISTS idx_album_token  ON media_albums(token);
         CREATE INDEX IF NOT EXISTS idx_fwd_source   ON forward_log(source_chat_id, source_msg_id);
     """)
 
@@ -234,3 +250,75 @@ def all_settings() -> dict:
     rows = conn.execute("SELECT key, value FROM bot_settings").fetchall()
     conn.close()
     return {r["key"]: r["value"] for r in rows}
+
+
+# ─── Media Album helpers (bot deep-link) ─────────────────────────────────────
+import json as _json
+
+
+def create_media_album(token: str, src_chat_id: int, src_msg_ids: list,
+                       caption: str = "", thumb_file_id: str = None) -> dict:
+    """
+    Store an album record for bot deep-link serving.
+    src_msg_ids: list of Telegram message IDs in the album (ints).
+    Returns the created record as dict.
+    """
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR IGNORE INTO media_albums
+           (token, src_chat_id, src_msg_ids, caption, thumb_file_id)
+           VALUES (?,?,?,?,?)""",
+        (token, src_chat_id, _json.dumps(src_msg_ids), caption or "", thumb_file_id)
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM media_albums WHERE token=?", (token,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    d = dict(row)
+    d["src_msg_ids"] = _json.loads(d["src_msg_ids"])
+    return d
+
+
+def get_media_album(token: str) -> dict | None:
+    """Fetch album by token; increments access_count."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM media_albums WHERE token=? AND is_active=1", (token,)
+    ).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE media_albums SET access_count=access_count+1 WHERE token=?",
+            (token,)
+        )
+        conn.commit()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    d["src_msg_ids"] = _json.loads(d["src_msg_ids"])
+    return d
+
+
+def list_media_albums(limit: int = 50, offset: int = 0) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM media_albums ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (limit, offset)
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["src_msg_ids"] = _json.loads(d["src_msg_ids"])
+        result.append(d)
+    return result
+
+
+def delete_media_album(token: str):
+    conn = get_conn()
+    conn.execute("UPDATE media_albums SET is_active=0 WHERE token=?", (token,))
+    conn.commit()
+    conn.close()

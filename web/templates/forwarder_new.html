@@ -103,31 +103,52 @@
             </label>
           </div>
           <div class="link-mode-desc">
-            <table class="link-mode-table">
+            <div class="link-mode-flow">
+              <div class="flow-step">
+                <div class="flow-icon">📋</div>
+                <div>Forum nguồn: album 3 ảnh + 1 video</div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">🤖</div>
+                <div>Bot lưu album → tạo <code>t.me/bot?start=TOKEN</code></div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">📤</div>
+                <div>Forum đích: album preview (ảnh + thumbnail) + <strong>1 link duy nhất</strong></div>
+              </div>
+              <div class="flow-arrow">↓</div>
+              <div class="flow-step">
+                <div class="flow-icon">👆</div>
+                <div>User click link → Telegram mở → bot gửi <strong>nguyên album gốc</strong></div>
+              </div>
+            </div>
+            <table class="link-mode-table" style="margin-top:12px">
               <tr>
-                <th>Loại file</th>
-                <th>Khi TẮT (forward thường)</th>
-                <th>Khi BẬT (link mode)</th>
+                <th>Loại post</th>
+                <th>Preview ở forum đích</th>
+                <th>Khi click link</th>
               </tr>
               <tr>
-                <td>🎬 Video</td>
-                <td>Forward nguyên file video</td>
-                <td>Gửi <strong>thumbnail</strong> + nút "Nhấp để xem" → link</td>
+                <td>🖼️ Album ảnh (5 ảnh)</td>
+                <td>Album 5 ảnh + link</td>
+                <td>Bot gửi 5 ảnh gốc chất lượng cao</td>
               </tr>
               <tr>
-                <td>🖼️ Ảnh</td>
-                <td>Forward ảnh gốc</td>
-                <td>Gửi ảnh + caption chứa link chia sẻ</td>
+                <td>🎬 Video đơn</td>
+                <td>Thumbnail + link</td>
+                <td>Bot gửi video gốc (full)</td>
+              </tr>
+              <tr>
+                <td>🖼️🎬 Hỗn hợp ảnh + video</td>
+                <td>Ảnh + thumbnail trong 1 album + link</td>
+                <td>Bot gửi cả ảnh lẫn video gốc</td>
               </tr>
               <tr>
                 <td>📄 File / Audio</td>
-                <td>Forward nguyên file</td>
-                <td>Gửi tin nhắn text với link tải file</td>
-              </tr>
-              <tr>
-                <td>💬 Văn bản</td>
-                <td>Forward nguyên văn bản</td>
-                <td>Forward nguyên văn bản (không tạo link)</td>
+                <td>Text với link</td>
+                <td>Bot gửi file gốc</td>
               </tr>
             </table>
           </div>

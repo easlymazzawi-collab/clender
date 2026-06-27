@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ─── Telegram Bot (python-telegram-bot) ──────────────────────────────────────
-BOT_TOKEN  = os.getenv("BOT_TOKEN", "")
-ADMIN_IDS  = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")   # e.g. "hongcliprobot" (no @)
+ADMIN_IDS    = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
 # ─── Telethon (user account — for forum forwarder) ───────────────────────────
 TELETHON_API_ID   = int(os.getenv("TELETHON_API_ID", "0"))

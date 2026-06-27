@@ -15,6 +15,7 @@ Commands:
   /cancel         – Cancel current operation
 """
 
+import asyncio
 import logging
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -25,12 +26,13 @@ from telegram.constants import ParseMode
 
 from config.settings import (
     ADMIN_IDS, DEST_FORUM_ID, BASE_URL, LINK_CAPTION_TEMPLATE,
-    CLONE_DELAY_SECONDS
+    CLONE_DELAY_SECONDS, BOT_USERNAME,
 )
 from database.models import (
     create_media_link, get_media_link, list_media_links,
     delete_media_link, upsert_topic, list_topics,
-    list_forward_logs, log_forward, get_setting, set_setting, all_settings
+    list_forward_logs, log_forward, get_setting, set_setting, all_settings,
+    get_media_album, list_media_albums,
 )
 from utils.token import generate_token
 
@@ -115,6 +117,21 @@ async def create_link_for_message(msg, uploader_id, uploader_name) -> str | None
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+
+    # ── Deep link: /start TOKEN → serve album ─────────────────────────────
+    if ctx.args:
+        token = ctx.args[0].strip()
+        album = get_media_album(token)
+        if album:
+            await _serve_album(update, ctx, album)
+            return
+        # Unknown token
+        await update.message.reply_text(
+            "❌ Link không hợp lệ hoặc đã hết hạn."
+        )
+        return
+
+    # ── Normal /start ──────────────────────────────────────────────────────
     keyboard = [
         [InlineKeyboardButton("📁 Chia sẻ Media", callback_data="help_share")],
         [InlineKeyboardButton("↩️ Forward có tên", callback_data="help_fwd"),
@@ -134,6 +151,65 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: dict):
+    """
+    Serve an album to the user who clicked the bot deep link.
+    Uses copy_message to re-send original messages without "Forwarded from".
+    Falls back to forward_message if copy fails.
+    """
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    src_chat_id = album["src_chat_id"]
+    src_msg_ids = album["src_msg_ids"]   # list of int
+
+    if not src_msg_ids:
+        await update.message.reply_text("❌ Album trống.")
+        return
+
+    await update.message.reply_text(
+        f"⏳ Đang gửi {len(src_msg_ids)} file…",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+    sent = 0
+    for msg_id in src_msg_ids:
+        try:
+            # copy_message: no "Forwarded from" attribution
+            await ctx.bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=src_chat_id,
+                message_id=msg_id,
+            )
+            sent += 1
+            await asyncio.sleep(0.3)
+        except Exception as copy_err:
+            # Fallback: forward_message (shows "Forwarded from")
+            try:
+                await ctx.bot.forward_message(
+                    chat_id=chat_id,
+                    from_chat_id=src_chat_id,
+                    message_id=msg_id,
+                )
+                sent += 1
+                await asyncio.sleep(0.3)
+            except Exception as fwd_err:
+                logger.warning(
+                    f"serve_album: cannot serve msg {msg_id} "
+                    f"from {src_chat_id}: copy={copy_err}, fwd={fwd_err}"
+                )
+
+    if sent == 0:
+        await update.message.reply_text(
+            "❌ Không thể gửi media. Bot cần được thêm vào forum nguồn.\n"
+            "Liên hệ admin để được hỗ trợ."
+        )
+    elif sent < len(src_msg_ids):
+        await update.message.reply_text(
+            f"⚠️ Đã gửi {sent}/{len(src_msg_ids)} file. "
+            f"{len(src_msg_ids) - sent} file không khả dụng."
+        )
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
