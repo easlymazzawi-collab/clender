@@ -97,14 +97,15 @@
           </td>
           <td class="date">{{ s.updated_at or s.last_updated }}</td>
           <td>
-            <a href="{{ url_for('forwarder_session', key=s.key) }}" class="btn btn-xs">📊</a>
-            {% if live and live.status == 'running' %}
-              <button class="btn btn-xs btn-danger" onclick="stopSession('{{ s.key }}')">⏹</button>
+            <a href="{{ url_for('forwarder_session', key=s.key) }}" class="btn btn-xs" title="Chi tiết">📊</a>
+            {% if live and live.status in ('running', 'starting') %}
+              <button class="btn btn-xs btn-warn" onclick="stopSession('{{ s.key }}')" title="Tạm dừng">⏸</button>
             {% else %}
+              <button class="btn btn-xs btn-success" onclick="resumeSession('{{ s.key }}')" title="Tiếp tục">▶️</button>
               <form method="POST" action="{{ url_for('forwarder_delete', key=s.key) }}"
                     style="display:inline"
-                    onsubmit="return confirm('Xóa phiên này?')">
-                <button class="btn btn-xs btn-danger" type="submit">🗑️</button>
+                    onsubmit="return confirm('Xóa phiên này? (mất tiến độ resume)')">
+                <button class="btn btn-xs btn-danger" type="submit" title="Xóa">🗑️</button>
               </form>
             {% endif %}
           </td>
@@ -193,11 +194,25 @@ fetch('/health').then(r => r.json()).then(d => {
 });
 
 async function stopSession(key) {
-  if (!confirm('Dừng phiên này?')) return;
-  const res = await fetch(`/forwarder/stop/${key}`, { method: 'POST' });
-  const j = await res.json();
-  showToast('⏹ Đang dừng phiên…');
+  if (!confirm('Tạm dừng phiên này? (có thể tiếp tục sau)')) return;
+  await fetch(`/forwarder/stop/${key}`, { method: 'POST' });
+  showToast('⏸ Đang tạm dừng… (tiến độ được lưu)');
   setTimeout(() => location.reload(), 2000);
+}
+
+async function resumeSession(key) {
+  showToast('▶️ Đang tiếp tục từ chỗ dừng…');
+  const res = await fetch(`/forwarder/resume/${key}`, { method: 'POST' });
+  if (res.redirected) {
+    window.location.href = res.url;
+    return;
+  }
+  const j = await res.json().catch(() => null);
+  if (j && !j.ok) {
+    showToast('❌ ' + j.error, 4000);
+  } else {
+    setTimeout(() => location.reload(), 1500);
+  }
 }
 </script>
 {% endblock %}

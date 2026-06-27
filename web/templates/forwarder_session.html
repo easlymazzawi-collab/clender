@@ -19,8 +19,10 @@
     </div>
   </div>
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-    {% if status == 'running' %}
-    <button class="btn btn-danger" onclick="stopSession()">⏹ Dừng</button>
+    {% if status in ('running', 'starting') %}
+    <button class="btn btn-warn" onclick="stopSession()">⏸ Tạm dừng</button>
+    {% else %}
+    <button class="btn btn-success" onclick="resumeSession()">▶️ Tiếp tục</button>
     {% endif %}
     <a href="{{ url_for('forwarder_dashboard') }}" class="btn">↩️ Quay lại</a>
   </div>
@@ -157,9 +159,19 @@ const SESSION_KEY = "{{ key }}";
 const SESSION_STATUS = "{{ status }}";
 
 async function stopSession() {
-  if (!confirm('Dừng phiên này?')) return;
+  if (!confirm('Tạm dừng phiên này? (có thể tiếp tục sau)')) return;
   await fetch(`/forwarder/stop/${SESSION_KEY}`, { method: 'POST' });
-  showToast('⏹ Đang dừng…');
+  showToast('⏸ Đang tạm dừng… (tiến độ được lưu)');
+  setTimeout(() => location.reload(), 2000);
+}
+
+async function resumeSession() {
+  showToast('▶️ Đang tiếp tục từ chỗ dừng…');
+  const res = await fetch(`/forwarder/resume/${SESSION_KEY}`, { method: 'POST' });
+  if (res.redirected) { window.location.href = res.url; return; }
+  const j = await res.json().catch(() => null);
+  if (j && !j.ok) showToast('❌ ' + j.error, 4000);
+  else setTimeout(() => location.reload(), 1500);
 }
 
 function clearLog() {

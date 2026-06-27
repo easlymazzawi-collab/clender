@@ -320,6 +320,35 @@ def forwarder_stop(key: str):
     return jsonify({"ok": True, "key": key, "status": "stopping"})
 
 
+@app.route("/forwarder/resume/<key>", methods=["POST"])
+def forwarder_resume(key: str):
+    """
+    Tiếp tục phiên đã dừng.
+    Đọc cfg + mode từ DB → start_session lại.
+    State file (keyed by src_dst) còn nguyên → tự resume từ chỗ dừng.
+    """
+    if not _telethon_ready:
+        return jsonify({"ok": False, "error": "Telethon chưa sẵn sàng"}), 400
+
+    if _runner.is_running(key):
+        return jsonify({"ok": False, "error": "Phiên đang chạy"}), 400
+
+    db_s = db_get_session(key)
+    if not db_s:
+        return jsonify({"ok": False, "error": "Không tìm thấy phiên"}), 404
+
+    cfg  = db_s.get("cfg", {})
+    mode = db_s.get("mode", "forward")
+    if not cfg.get("src_raw") or not cfg.get("dst_raw"):
+        return jsonify({"ok": False, "error": "Cấu hình phiên không hợp lệ"}), 400
+
+    try:
+        tmp_key = _runner.start_session(cfg, mode=mode)
+        return redirect(url_for("forwarder_session", key=tmp_key))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/forwarder/delete/<key>", methods=["POST"])
 def forwarder_delete(key: str):
     _runner.stop_session(key)

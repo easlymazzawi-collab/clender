@@ -231,6 +231,10 @@ code { font-family: 'JetBrains Mono', monospace; background: var(--bg3); padding
 .btn-xs { padding: 2px 7px; font-size: 11px; }
 .btn-danger { border-color: #f87171; color: #f87171; }
 .btn-danger:hover { background: rgba(248,113,113,0.15); }
+.btn-success { border-color: #6ee7b7; color: #6ee7b7; }
+.btn-success:hover { background: rgba(110,231,183,0.15); }
+.btn-warn { border-color: #f59e0b; color: #f59e0b; }
+.btn-warn:hover { background: rgba(245,158,11,0.15); }
 .btn-copy { background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px 4px; opacity: .6; }
 .btn-copy:hover { opacity: 1; }
 
