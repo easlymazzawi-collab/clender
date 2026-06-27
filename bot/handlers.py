@@ -208,16 +208,25 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: dict):
-    """Gửi album media gốc cho user khi click deep link."""
+    """
+    Gửi album media gốc cho user khi click deep link t.me/bot?start=TOKEN.
+
+    Yêu cầu: Bot phải là member/admin trong forum NGUỒN (src_chat_id)
+    để có thể copy/forward messages từ đó về cho user.
+    """
+    user        = update.effective_user
     chat_id     = update.effective_chat.id
     src_chat_id = album["src_chat_id"]
     src_msg_ids = album["src_msg_ids"]
+    n           = len(src_msg_ids)
+
+    logger.info(f"serve_album: user={user.id} src={src_chat_id} msgs={src_msg_ids}")
 
     if not src_msg_ids:
         await update.message.reply_text("❌ Album trống.")
         return
 
-    # copy_messages: gửi tất cả cùng lúc → Telegram tự group thành album
+    # ── Thử 1: copy_messages (batch, không có 'Forwarded from') ──────────────
     try:
         result = await ctx.bot.copy_messages(
             chat_id=chat_id,
@@ -225,11 +234,12 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
             message_ids=src_msg_ids,
         )
         if result:
+            logger.info(f"serve_album OK via copy_messages ({n} msgs)")
             return
     except Exception as e:
-        logger.warning(f"copy_messages failed: {e} — trying forward_messages")
+        logger.warning(f"copy_messages from {src_chat_id}: {type(e).__name__}: {e}")
 
-    # Fallback: forward_messages (có "Forwarded from")
+    # ── Thử 2: forward_messages (batch, có 'Forwarded from') ─────────────────
     try:
         result = await ctx.bot.forward_messages(
             chat_id=chat_id,
@@ -237,32 +247,46 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
             message_ids=src_msg_ids,
         )
         if result:
+            logger.info(f"serve_album OK via forward_messages ({n} msgs)")
             return
     except Exception as e:
-        logger.warning(f"forward_messages failed: {e} — individual fallback")
+        logger.warning(f"forward_messages from {src_chat_id}: {type(e).__name__}: {e}")
 
-    # Last resort: từng message riêng lẻ
+    # ── Thử 3: từng message riêng lẻ ─────────────────────────────────────────
     sent = 0
     for mid in src_msg_ids:
         try:
-            await ctx.bot.copy_message(chat_id=chat_id,
-                                       from_chat_id=src_chat_id, message_id=mid)
+            await ctx.bot.copy_message(
+                chat_id=chat_id, from_chat_id=src_chat_id, message_id=mid
+            )
             sent += 1
             await asyncio.sleep(0.2)
-        except Exception:
+        except Exception as e1:
             try:
-                await ctx.bot.forward_message(chat_id=chat_id,
-                                              from_chat_id=src_chat_id, message_id=mid)
+                await ctx.bot.forward_message(
+                    chat_id=chat_id, from_chat_id=src_chat_id, message_id=mid
+                )
                 sent += 1
                 await asyncio.sleep(0.2)
-            except Exception as e:
-                logger.warning(f"Cannot serve msg {mid}: {e}")
+            except Exception as e2:
+                logger.warning(f"Cannot serve msg {mid}: {e2}")
 
     if sent == 0:
         await update.message.reply_text(
-            "❌ Không thể gửi media.\n"
-            "Bot cần được thêm vào forum nguồn, hoặc file đã bị xóa."
+            "❌ Không thể gửi media.\n\n"
+            "Nguyên nhân có thể:\n"
+            "• Bot chưa được thêm vào forum nguồn\n"
+            "• File đã bị xóa ở nguồn\n"
+            "• Forum nguồn bị khóa forward\n\n"
+            f"Chat nguồn: `{src_chat_id}`",
+            parse_mode=ParseMode.MARKDOWN
         )
+        logger.error(f"serve_album FAILED: src={src_chat_id} msgs={src_msg_ids}")
+    elif sent < n:
+        await update.message.reply_text(
+            f"⚠️ Đã gửi {sent}/{n} file. {n - sent} file không khả dụng."
+        )
+        logger.info(f"serve_album partial: {sent}/{n}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
