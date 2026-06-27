@@ -1,6 +1,6 @@
 """
 Entry-point for the Telegram bot.
-Run: python bot/main.py
+Run: python run.py --bot
 """
 import logging
 from telegram.ext import (
@@ -10,10 +10,12 @@ from telegram.ext import (
 from config.settings import BOT_TOKEN
 from database.models import init_db
 from bot.handlers import (
-    cmd_start, cmd_help, cmd_share, cmd_forward, cmd_fwd_anon,
+    cmd_start, cmd_help, cmd_mylinks,
+    cmd_share, cmd_forward, cmd_fwd_anon,
     cmd_clone_topic, cmd_stats, cmd_links, cmd_del_link,
     cmd_settings, cmd_set,
-    handle_media, handle_callback
+    cmd_allow, cmd_disallow, cmd_whitelist,
+    handle_media, handle_callback,
 )
 
 logging.basicConfig(
@@ -30,20 +32,26 @@ def build_app():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Commands
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("share", cmd_share))
-    app.add_handler(CommandHandler("forward", cmd_forward))
+    # ── User commands ──────────────────────────────────────────────────────────
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("mylinks",  cmd_mylinks))
+    app.add_handler(CommandHandler("share",    cmd_share))
+    app.add_handler(CommandHandler("forward",  cmd_forward))
     app.add_handler(CommandHandler("fwd_anon", cmd_fwd_anon))
-    app.add_handler(CommandHandler("clone_topic", cmd_clone_topic))
-    app.add_handler(CommandHandler("stats", cmd_stats))
-    app.add_handler(CommandHandler("links", cmd_links))
-    app.add_handler(CommandHandler("del_link", cmd_del_link))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CommandHandler("set", cmd_set))
 
-    # Media messages (auto-link generation)
+    # ── Admin commands ─────────────────────────────────────────────────────────
+    app.add_handler(CommandHandler("clone_topic", cmd_clone_topic))
+    app.add_handler(CommandHandler("stats",       cmd_stats))
+    app.add_handler(CommandHandler("links",       cmd_links))
+    app.add_handler(CommandHandler("del_link",    cmd_del_link))
+    app.add_handler(CommandHandler("settings",    cmd_settings))
+    app.add_handler(CommandHandler("set",         cmd_set))
+    app.add_handler(CommandHandler("allow",       cmd_allow))
+    app.add_handler(CommandHandler("disallow",    cmd_disallow))
+    app.add_handler(CommandHandler("whitelist",   cmd_whitelist))
+
+    # ── Media handler ──────────────────────────────────────────────────────────
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.Document.ALL |
         filters.AUDIO | filters.VOICE | filters.VIDEO_NOTE |
@@ -51,7 +59,7 @@ def build_app():
         handle_media
     ))
 
-    # Callback queries (inline keyboard buttons)
+    # ── Inline keyboard callbacks ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     return app
