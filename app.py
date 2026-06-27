@@ -455,7 +455,58 @@ def api_fwd_session(key: str):
 
 @app.route("/favicon.ico")
 def favicon():
-    return "", 204   # No Content — stop browser spam in logs
+    return "", 204
+
+
+@app.route("/health")
+def health():
+    """
+    Health check — shows which components are running.
+    Useful to diagnose 'bot không phản ứng' issues.
+    """
+    from config.settings import BOT_TOKEN, BOT_USERNAME, TELETHON_API_ID
+    from forwarder.state import STATE_DIR
+    import os
+
+    bot_token_ok  = bool(BOT_TOKEN)
+    bot_user_ok   = bool(BOT_USERNAME)
+    telethon_ok   = bool(TELETHON_API_ID)
+    session_file  = os.path.join(STATE_DIR, os.getenv("TELETHON_SESSION","session_main") + ".session")
+    session_ok    = os.path.exists(session_file)
+
+    conn = get_conn()
+    albums = conn.execute("SELECT COUNT(*) FROM media_albums WHERE is_active=1").fetchone()[0]
+    links  = conn.execute("SELECT COUNT(*) FROM media_links  WHERE is_active=1").fetchone()[0]
+    conn.close()
+
+    return jsonify({
+        "status": "ok",
+        "components": {
+            "web_server":      True,
+            "bot_token_set":   bot_token_ok,
+            "bot_username_set": bot_user_ok,
+            "telethon_api_set": telethon_ok,
+            "telethon_session": session_ok,
+            "telethon_ready":  _telethon_ready,
+        },
+        "database": {
+            "albums_stored": albums,
+            "links_stored":  links,
+        },
+        "warnings": [
+            w for w in [
+                None if bot_token_ok   else "BOT_TOKEN not set — bot cannot start",
+                None if bot_user_ok    else "BOT_USERNAME not set — deep links will be broken",
+                None if telethon_ok    else "TELETHON_API_ID not set — forwarder disabled",
+                None if session_ok     else f"Session file missing: run 'python run.py --auth'",
+                None if _telethon_ready else _telethon_error or "Telethon not initialized",
+            ] if w
+        ],
+        "note": (
+            "Bot Telegram phải đang CHẠY để xử lý deep link /start TOKEN. "
+            "Dùng 'python run.py' (không phải --web) để chạy cả bot lẫn web."
+        ),
+    })
 
 
 @app.errorhandler(404)

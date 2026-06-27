@@ -147,9 +147,16 @@ async def _download_thumb(client: TelegramClient, msg: Message) -> Optional[byte
 # ─── Store album record ───────────────────────────────────────────────────────
 
 def _get_caption(msg) -> str:
-    """Extract caption/text from a Telethon message (handles all media types)."""
-    # msg.message = caption for media, text for text messages
-    return (getattr(msg, "message", None) or "").strip()
+    """
+    Extract caption/text from a Telethon message.
+    In Telethon: msg.message = caption for media OR text for text messages.
+    Fall back to msg.text for safety.
+    """
+    return (
+        getattr(msg, "message", None)
+        or getattr(msg, "text", None)
+        or ""
+    ).strip()
 
 
 def _make_album_token(msgs: list) -> tuple[str, str]:

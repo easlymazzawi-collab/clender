@@ -3,23 +3,30 @@
 {% block page_title %}⚡ Forwarder Telegram{% endblock %}
 
 {% block content %}
-<!-- Status banner -->
+<!-- Status banners -->
 {% if not telethon_ready %}
 <div class="alert alert-warn">
   <span>⚠️</span>
   <div>
-    <strong>Telethon chưa được xác thực.</strong>
-    {{ telethon_error }}
-    <br/>
-    <code>python3 forwarder/auth.py</code> — chạy lệnh này một lần để đăng nhập.
+    <strong>Telethon chưa xác thực.</strong> {{ telethon_error }}<br/>
+    <code>python run.py --auth</code> — chạy 1 lần để đăng nhập.
   </div>
 </div>
 {% else %}
 <div class="alert alert-ok">
   <span>✅</span>
-  <strong>Telethon đã kết nối.</strong> Bạn có thể tạo phiên mới.
+  <strong>Telethon sẵn sàng.</strong> Forwarder có thể clone forum.
 </div>
 {% endif %}
+
+<div class="alert alert-warn" id="botStatusBanner" style="display:none">
+  <span>🤖</span>
+  <div>
+    <strong>Bot Telegram chưa chạy!</strong>
+    Deep link <code>t.me/bot?start=TOKEN</code> sẽ không được xử lý.<br/>
+    Dùng <code>python run.py</code> (không phải <code>--web</code>) để chạy cả bot lẫn web.
+  </div>
+</div>
 
 <!-- Header actions -->
 <div class="card-header" style="background:var(--bg2);border-radius:var(--radius);padding:16px 20px;margin-bottom:0;">
@@ -175,6 +182,16 @@
 
 {% block scripts %}
 <script>
+// Check if bot is running by seeing if albums are being stored
+// (if bot token is set but bot process isn't running, /start won't work)
+fetch('/health').then(r => r.json()).then(d => {
+  const warnings = d.warnings || [];
+  const botWarn = warnings.some(w => w && w.includes('BOT_TOKEN'));
+  if (botWarn || !d.components.bot_token_set) {
+    document.getElementById('botStatusBanner').style.display = 'flex';
+  }
+});
+
 async function stopSession(key) {
   if (!confirm('Dừng phiên này?')) return;
   const res = await fetch(`/forwarder/stop/${key}`, { method: 'POST' });
