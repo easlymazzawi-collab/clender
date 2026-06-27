@@ -37,7 +37,15 @@ logger = logging.getLogger(__name__)
 
 def build_bot_link(token: str) -> str:
     """t.me/BOT_USERNAME?start=TOKEN"""
-    username = BOT_USERNAME.lstrip("@")
+    username = (BOT_USERNAME or "").lstrip("@").strip()
+    if not username:
+        logger.error(
+            "BOT_USERNAME is not set in .env! "
+            "Links will be broken (missing bot name). "
+            "Set BOT_USERNAME=your_bot_username in .env and restart."
+        )
+        # Return a placeholder so it's obvious something is wrong
+        return f"https://t.me/SET_BOT_USERNAME_IN_ENV?start={token}"
     return f"https://t.me/{username}?start={token}"
 
 
