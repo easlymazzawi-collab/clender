@@ -94,6 +94,11 @@ def _max_mb() -> int:
     return int(get_setting("max_file_mb", str(MAX_FILE_SIZE_MB)) or MAX_FILE_SIZE_MB)
 
 
+def _show_thumbnail() -> bool:
+    """Mặc định TẮT — bot chỉ trả link. Bật qua /panel hoặc /set show_thumbnail 1."""
+    return get_setting("show_thumbnail", "0") == "1"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SHARE LINK HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -779,12 +784,16 @@ async def handle_media(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     orig_cap = (msg.caption or msg.text or "").strip()
     full_cap = _caption_with_link(orig_cap, url)
 
-    if fi["file_type"] in ("video", "video_note", "animation") and fi.get("thumb_file_id"):
-        await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
-    elif fi["file_type"] == "photo":
-        await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
+    # Mặc định: chỉ trả link (text). Bật show_thumbnail → kèm thumbnail/ảnh
+    if _show_thumbnail():
+        if fi["file_type"] in ("video", "video_note", "animation") and fi.get("thumb_file_id"):
+            await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
+        elif fi["file_type"] == "photo":
+            await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
+        else:
+            await msg.reply_text(full_cap[:4096])
     else:
-        await msg.reply_text(full_cap[:4096])
+        await msg.reply_text(full_cap[:4096], disable_web_page_preview=False)
 
 
 async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
@@ -811,12 +820,15 @@ async def _flush_album(key: str, ctx: ContextTypes.DEFAULT_TYPE, user):
     url      = build_share_url(token)
     full_cap = _caption_with_link((msg.caption or "").strip(), url)
 
-    # Preview: ảnh/thumbnail đầu + caption link
+    # Mặc định: chỉ trả link. Bật show_thumbnail → kèm ảnh/thumbnail đầu album
     try:
-        if fi["file_type"] == "photo":
-            await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
-        elif fi.get("thumb_file_id"):
-            await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
+        if _show_thumbnail():
+            if fi["file_type"] == "photo":
+                await msg.reply_photo(photo=fi["file_id"], caption=full_cap[:1024])
+            elif fi.get("thumb_file_id"):
+                await msg.reply_photo(photo=fi["thumb_file_id"], caption=full_cap[:1024])
+            else:
+                await msg.reply_text(f"📦 Album {len(msg_ids)} media\n\n{full_cap}"[:4096])
         else:
             await msg.reply_text(f"📦 Album {len(msg_ids)} media\n\n{full_cap}"[:4096])
     except Exception as e:
@@ -1069,16 +1081,31 @@ async def _handle_panel(q, ctx, action: str):
         return
 
     if action == "settings":
+        thumb_on = _show_thumbnail()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                ("🖼️ Thumbnail: BẬT ✅" if thumb_on else "🖼️ Thumbnail: TẮT ❌"),
+                callback_data="panel:toggle_thumb")],
+            [InlineKeyboardButton("◀️ Quay lại", callback_data="panel:main")],
+        ])
         await q.message.edit_text(
             "⚙️ *CÀI ĐẶT KHÁC*\n\n"
+            f"🖼️ Hiện thumbnail khi trả link: `{'BẬT' if thumb_on else 'TẮT'}`\n"
             f"📏 Max file: `{_max_mb()} MB`\n"
             f"⏱️ Rate limit: `{get_setting('rate_limit','20')}/giờ`\n\n"
-            "Đổi bằng lệnh:\n"
+            "Bấm nút để bật/tắt thumbnail.\n"
+            "Hoặc đổi bằng lệnh:\n"
             "`/set max_file_mb 50`\n"
-            "`/set rate_limit 20`\n"
-            "`/set caption_template ...`",
-            parse_mode=ParseMode.MARKDOWN, reply_markup=_panel_back_kb()
+            "`/set rate_limit 20`",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=kb
         )
+        return
+
+    if action == "toggle_thumb":
+        new_val = "0" if _show_thumbnail() else "1"
+        set_setting("show_thumbnail", new_val)
+        await q.answer("✅ Đã " + ("BẬT" if new_val == "1" else "TẮT") + " thumbnail")
+        await _handle_panel(q, ctx, "settings")
         return
 
     if action == "broadcast":
