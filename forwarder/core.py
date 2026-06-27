@@ -28,7 +28,7 @@ from .state import (
     save_session_meta, db_set_session_progress,
     make_key, STATE_DIR,
 )
-from .link_sender import send_as_link, _media_type_of
+from .link_sender import send_as_link, send_album_as_links, _media_type_of
 
 logger = logging.getLogger(__name__)
 
@@ -487,33 +487,32 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         pending_album["gid"]  = None
         pending_album["msgs"] = []
 
-        # ── Link mode: each photo in album → individual share-link ───────────
+        # ── Link mode: gửi toàn bộ album thành 1 media group + links ───────────
         if link_mode:
             flush_skip_log(first_id - 1)
-            for m in album:
-                try:
-                    sent = await send_as_link(
-                        client, m,
-                        dst_entity.id,
-                        dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
-                        caption_tpl,
-                    )
-                    if sent:
-                        count += 1
-                        stats["normal"] += 1
-                        stats["links_created"] = stats.get("links_created", 0) + 1
-                    else:
-                        skipped += 1
-                        stats["skipped"] += 1
-                    last_id_buf = m.id
-                    save_last_id(topic_state_key, last_id_buf)
-                    consecutive_errors = 0
-                    await asyncio.sleep(0.3)
-                except Exception as e:
-                    stats["errors"] += 1
-                    logger.warning(f"album link_mode id={m.id}: {e}")
-                    last_id_buf = m.id
-                    save_last_id(topic_state_key, last_id_buf)
+            try:
+                sent_list = await send_album_as_links(
+                    client, album,
+                    dst_entity.id,
+                    dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
+                    caption_tpl,
+                )
+                n_sent = len([s for s in sent_list if s])
+                if n_sent:
+                    count += n  # count each original message in album
+                    stats["album"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + n
+                else:
+                    skipped += n
+                    stats["skipped"] += n
+                last_id_buf = last_mid
+                save_last_id(topic_state_key, last_id_buf)
+                consecutive_errors = 0
+            except Exception as e:
+                stats["errors"] += 1
+                logger.warning(f"album link_mode ({first_id}→{last_mid}): {e}")
+                last_id_buf = last_mid
+                save_last_id(topic_state_key, last_id_buf)
             if progress_cb:
                 progress_cb({"phase": "forward",
                              "total_forwarded": count + stats.get("_base", 0),
@@ -742,25 +741,25 @@ async def run_session(client: TelegramClient, cfg: dict,
         pending_album["dst_topic"] = None
 
         if link_mode:
-            # Each photo in album → individual share-link
-            for m in album:
-                try:
-                    sent = await send_as_link(
-                        client, m,
-                        dst_entity.id,
-                        dt if dt and dt != 1 else None,
-                        caption_tpl,
-                    )
-                    if sent:
-                        count += 1
-                        stats["normal"] += 1
-                        stats["links_created"] = stats.get("links_created", 0) + 1
-                    last_id_buf = m.id
-                    await asyncio.sleep(0.3)
-                except Exception as e:
-                    stats["errors"] += 1
-                    logger.warning(f"album link_mode id={m.id}: {e}")
-                    last_id_buf = m.id
+            # Gửi toàn album thành 1 media group + links gộp trong caption
+            try:
+                sent_list = await send_album_as_links(
+                    client, album,
+                    dst_entity.id,
+                    dt if dt and dt != 1 else None,
+                    caption_tpl,
+                )
+                n = len(album)
+                n_sent = len([s for s in sent_list if s])
+                if n_sent:
+                    count += n
+                    stats["album"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + n
+                last_id_buf = album[-1].id
+            except Exception as e:
+                stats["errors"] += 1
+                logger.warning(f"album link_mode: {e}")
+                last_id_buf = album[-1].id
             return
 
         try:
