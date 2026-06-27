@@ -88,8 +88,21 @@ def _file_name_of(msg: Message) -> Optional[str]:
 
 # ─── Thumbnail download ───────────────────────────────────────────────────────
 
+async def _dl(client: TelegramClient, msg, **kwargs) -> Optional[bytes]:
+    """
+    Download media to bytes. Works with Telethon 1.36+.
+    Pass file=bytes (the type) to get raw bytes returned directly.
+    """
+    try:
+        data = await client.download_media(msg, file=bytes, **kwargs)
+        return data if isinstance(data, (bytes, bytearray)) else None
+    except Exception as e:
+        logger.debug(f"_dl id={getattr(msg,'id','?')}: {e}")
+        return None
+
+
 async def _download_thumb(client: TelegramClient, msg: Message) -> Optional[bytes]:
-    """Download best available thumbnail bytes for a video message."""
+    """Download best available thumbnail bytes for a video/document message."""
     try:
         doc = getattr(msg.media, "document", None)
         if doc and getattr(doc, "thumbs", None):
@@ -98,8 +111,11 @@ async def _download_thumb(client: TelegramClient, msg: Message) -> Optional[byte
                 key=lambda t: t.w, reverse=True,
             )
             if best:
-                return await client.download_media(msg, thumb=best[0], bytes=True)
-        return await client.download_media(msg, thumb=-1, bytes=True)
+                data = await _dl(client, msg, thumb=best[0])
+                if data:
+                    return data
+        # fallback: let Telethon pick
+        return await _dl(client, msg, thumb=-1)
     except Exception as e:
         logger.debug(f"_download_thumb id={msg.id}: {e}")
         return None
@@ -183,7 +199,7 @@ async def send_as_link(
             )
 
         if ftype == "photo":
-            photo_bytes = await client.download_media(msg, bytes=True)
+            photo_bytes = await _dl(client, msg)
             if photo_bytes:
                 return await client.send_file(
                     file=photo_bytes, caption=full_cap[:1024], **kw
@@ -253,7 +269,7 @@ async def send_album_as_links(
 
         if ftype == "photo":
             try:
-                data = await client.download_media(msg, bytes=True)
+                data = await _dl(client, msg)
                 if data:
                     visual_bytes.append(data)
                     continue

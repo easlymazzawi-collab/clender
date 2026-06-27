@@ -242,50 +242,77 @@ async def send_msgs(client, msgs, dst_entity, hide_sender, dst_topic,
 async def get_pinned_message_ids(client: TelegramClient, entity,
                                  topic_id: int | None) -> list[int]:
     """
-    Return list of pinned message IDs in a topic (or General/whole chat).
-    Ordered newest-pin-first (same as Telegram UI).
+    Return list of pinned message IDs that belong to this topic.
+
+    BUG NOTE: In Telethon, passing reply_to= together with filter= causes
+    filter to be IGNORED (Telethon uses GetRepliesRequest internally which
+    ignores filters). So we fetch ALL pinned messages for the whole chat,
+    then manually filter by checking which topic each pinned message belongs to.
     """
     from telethon.tl.types import InputMessagesFilterPinned
     try:
-        if topic_id and topic_id != 1:
-            msgs = await client.get_messages(
-                entity,
-                filter=InputMessagesFilterPinned,
-                reply_to=topic_id,
-                limit=100,
-            )
-        else:
-            msgs = await client.get_messages(
-                entity,
-                filter=InputMessagesFilterPinned,
-                limit=100,
-            )
-        return [m.id for m in msgs if m and not getattr(m, "action", None)]
+        all_pinned = await client.get_messages(
+            entity,
+            filter=InputMessagesFilterPinned,
+            limit=100,
+        )
+        if not all_pinned:
+            return []
+
+        result = []
+        for m in all_pinned:
+            if not m or getattr(m, "action", None):
+                continue
+            rt      = getattr(m, "reply_to", None)
+            msg_top = getattr(rt, "reply_to_top_id", None) or getattr(rt, "reply_to_msg_id", None)
+
+            if not topic_id or topic_id == 1:
+                # General topic: no thread header, OR thread==1, OR msg IS the General header
+                if not msg_top or msg_top == 1 or m.id == 1:
+                    result.append(m.id)
+            else:
+                # Specific topic: top must match topic_id, OR msg itself IS topic header
+                if msg_top == topic_id or m.id == topic_id:
+                    result.append(m.id)
+
+        return result
     except Exception as e:
         logger.warning(f"get_pinned_message_ids topic={topic_id}: {e}")
         return []
 
 
 async def pin_message(client: TelegramClient, entity, msg_id: int,
-                      silent: bool = True) -> bool:
+                      silent: bool = True,
+                      max_flood_wait: int = 30) -> bool:
     """
-    Pin msg_id in entity (channel / supergroup forum topic).
-    silent=True → no "X pinned a message" notification in chat.
+    Pin msg_id in entity.
+    silent=True → no notification spam.
+    max_flood_wait: if FloodWait > this many seconds → skip (return False).
     Returns True on success.
     """
     from telethon.tl.functions.messages import UpdatePinnedMessageRequest
-    try:
-        await client(UpdatePinnedMessageRequest(
-            peer=entity,
-            id=msg_id,
-            silent=silent,
-            unpin=False,
-            pm_oneside=False,
-        ))
-        return True
-    except Exception as e:
-        logger.warning(f"pin_message id={msg_id}: {e}")
-        return False
+    from telethon.errors import FloodWaitError
+
+    for attempt in range(2):
+        try:
+            await client(UpdatePinnedMessageRequest(
+                peer=entity, id=msg_id,
+                silent=silent, unpin=False, pm_oneside=False,
+            ))
+            return True
+        except FloodWaitError as e:
+            if e.seconds > max_flood_wait:
+                logger.warning(
+                    f"pin_message id={msg_id}: FloodWait {e.seconds}s "
+                    f"> limit {max_flood_wait}s — skipping"
+                )
+                return False
+            logger.info(f"pin_message id={msg_id}: FloodWait {e.seconds}s, waiting…")
+            await asyncio.sleep(e.seconds + 1)
+        except Exception as e:
+            logger.warning(f"pin_message id={msg_id}: {e}")
+            return False
+    return False
 
 
 async def clone_pinned_messages(client: TelegramClient,
