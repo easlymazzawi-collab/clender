@@ -170,6 +170,37 @@ def dashboard():
 
 # ─── Media ────────────────────────────────────────────────────────────────────
 
+@app.route("/d/<token>")
+def deep_redirect(token: str):
+    """
+    Link bền vững: redirect sang bot hiện tại.
+    Nếu đổi bot (BOT_USERNAME mới) → mọi link /d/<token> cũ tự trỏ bot mới.
+    → Không bao giờ chết dù mất username bot cũ.
+    """
+    from config.settings import BOT_USERNAME as _bu
+    username = (_bu or "").lstrip("@").strip()
+    if not username:
+        return "BOT_USERNAME chưa cấu hình", 503
+    target = f"https://t.me/{username}?start={token}"
+    # Trang trung gian: vừa auto-redirect, vừa có nút phòng khi redirect chặn
+    html = f"""<!DOCTYPE html><html lang="vi"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Đang mở…</title>
+<meta http-equiv="refresh" content="0; url={target}">
+<style>body{{font-family:system-ui;background:#0f1117;color:#e2e8f0;
+display:flex;flex-direction:column;align-items:center;justify-content:center;
+height:100vh;margin:0;gap:20px}}
+a.btn{{background:#4f8ef7;color:#fff;padding:14px 28px;border-radius:10px;
+text-decoration:none;font-weight:600;font-size:16px}}</style>
+</head><body>
+<div style="font-size:48px">📦</div>
+<div>Đang mở media trong Telegram…</div>
+<a class="btn" href="{target}">▶️ Mở ngay</a>
+<script>location.href="{target}";</script>
+</body></html>"""
+    return html
+
+
 @app.route("/media/<token>")
 def serve_media(token: str):
     record = get_media_link(token)

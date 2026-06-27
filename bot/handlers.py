@@ -127,9 +127,17 @@ def _check_serve_rate(user_id: int) -> tuple[bool, int]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_share_url(token: str) -> str:
+    """
+    Tạo link chia sẻ theo LINK_MODE:
+      web → BASE_URL/d/TOKEN (bền vững, đổi bot không chết link)
+      bot → t.me/BOT_USERNAME?start=TOKEN (trực tiếp)
+    """
+    from config.settings import LINK_MODE
+    if LINK_MODE == "web" and BASE_URL:
+        return f"{BASE_URL.rstrip('/')}/d/{token}"
     if BOT_USERNAME:
         return f"https://t.me/{BOT_USERNAME.lstrip('@')}?start={token}"
-    return f"{BASE_URL}/media/{token}"
+    return f"{BASE_URL.rstrip('/')}/d/{token}"
 
 
 # ── Menu cấu hình link (hết hạn / giới hạn xem / cho forward) ────────────────

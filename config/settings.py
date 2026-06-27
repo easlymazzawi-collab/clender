@@ -8,6 +8,13 @@ BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")   # e.g. "hongcliprobot" (no @)
 ADMIN_IDS    = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
+# ─── Link mode ────────────────────────────────────────────────────────────────
+# "bot" : link trỏ thẳng t.me/BOT_USERNAME?start=TOKEN (đơn giản, nhưng nếu đổi
+#         bot mà mất username → link cũ chết)
+# "web" : link trỏ qua web server BASE_URL/d/TOKEN → redirect sang bot hiện tại
+#         → ĐỔI BOT chỉ cần đổi BOT_USERNAME, link cũ VẪN SỐNG (cần domain/VPS)
+LINK_MODE = os.getenv("LINK_MODE", "bot")
+
 # ─── Telethon (user account — for forum forwarder) ───────────────────────────
 TELETHON_API_ID   = int(os.getenv("TELETHON_API_ID", "0"))
 TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "")

@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 # ─── Bot deep link ────────────────────────────────────────────────────────────
 
 def build_bot_link(token: str) -> str:
+    """
+    Link theo LINK_MODE:
+      web → BASE_URL/d/TOKEN (bền vững khi đổi bot)
+      bot → t.me/BOT_USERNAME?start=TOKEN
+    """
+    from config.settings import LINK_MODE, BASE_URL
+    if LINK_MODE == "web" and BASE_URL:
+        return f"{BASE_URL.rstrip('/')}/d/{token}"
     username = (BOT_USERNAME or "").lstrip("@").strip()
     if not username:
         logger.error("BOT_USERNAME chưa set trong .env — link sẽ không hoạt động!")
