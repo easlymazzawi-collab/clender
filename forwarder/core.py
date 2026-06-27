@@ -28,6 +28,7 @@ from .state import (
     save_session_meta, db_set_session_progress,
     make_key, STATE_DIR,
 )
+from .link_sender import send_as_link, _media_type_of
 
 logger = logging.getLogger(__name__)
 
@@ -378,11 +379,16 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                                  progress_cb=None, stop_event=None):
     """
     Forward all messages of one topic. Returns (count, skipped).
-    Uses batch of 50 msgs per API call for speed (~10-20×).
-    Albums are forwarded as a single batch to preserve grouped_id.
+
+    link_mode=False (default): batch 50 msg/call via ForwardMessagesRequest — fastest.
+    link_mode=True: each media message → thumbnail/photo + share-link caption.
+      Albums are sent photo-by-photo (each with its own link).
+      Text-only messages are sent as-is.
     """
     only_filter = cfg.get("only_filter", "all")
     hide_sender = cfg.get("hide_sender", False)
+    link_mode   = cfg.get("link_mode", False)
+    caption_tpl = cfg.get("caption_template") or None
 
     topic_state_key = f"{map_key}_topic_{src_topic_id}"
     last_id         = load_last_id(topic_state_key)
@@ -480,6 +486,41 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         last_mid = album[-1].id
         pending_album["gid"]  = None
         pending_album["msgs"] = []
+
+        # ── Link mode: each photo in album → individual share-link ───────────
+        if link_mode:
+            flush_skip_log(first_id - 1)
+            for m in album:
+                try:
+                    sent = await send_as_link(
+                        client, m,
+                        dst_entity.id,
+                        dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
+                        caption_tpl,
+                    )
+                    if sent:
+                        count += 1
+                        stats["normal"] += 1
+                        stats["links_created"] = stats.get("links_created", 0) + 1
+                    else:
+                        skipped += 1
+                        stats["skipped"] += 1
+                    last_id_buf = m.id
+                    save_last_id(topic_state_key, last_id_buf)
+                    consecutive_errors = 0
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.warning(f"album link_mode id={m.id}: {e}")
+                    last_id_buf = m.id
+                    save_last_id(topic_state_key, last_id_buf)
+            if progress_cb:
+                progress_cb({"phase": "forward",
+                             "total_forwarded": count + stats.get("_base", 0),
+                             "links_created": stats.get("links_created", 0)})
+            return
+
+        # ── Normal mode: forward whole album in one API call ─────────────────
         try:
             flush_skip_log(first_id - 1)
             await send_msgs(client, album, dst_entity, hide_sender,
@@ -549,7 +590,8 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         if msg.grouped_id:
             if pending_album["gid"] != msg.grouped_id:
                 await flush_pending_album()
-                await flush_batch()
+                if not link_mode:
+                    await flush_batch()
                 pending_album["gid"]  = msg.grouped_id
                 pending_album["msgs"] = [msg]
             else:
@@ -572,6 +614,43 @@ async def forward_topic_messages(client, src_entity, dst_entity,
         if only_filter == "photo" and not msg.photo:
             _skip_media(); continue
 
+        # ── Link mode: send each message as share-link ────────────────────────
+        if link_mode:
+            try:
+                flush_skip_log(msg.id - 1)
+                sent = await send_as_link(
+                    client, msg,
+                    dst_entity.id, dst_topic_id if dst_topic_id and dst_topic_id != 1 else None,
+                    caption_tpl,
+                )
+                if sent:
+                    count += 1
+                    stats["normal"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + 1
+                else:
+                    skipped += 1
+                    stats["skipped"] += 1
+                last_id_buf = msg.id
+                save_last_id(topic_state_key, last_id_buf)
+                consecutive_errors = 0
+                if progress_cb:
+                    progress_cb({"phase": "forward",
+                                 "total_forwarded": count + stats.get("_base", 0),
+                                 "links_created": stats.get("links_created", 0)})
+                await asyncio.sleep(0.3)   # gentle rate-limit for downloads
+            except FloodWaitError as e:
+                stats["flood_wait"] = stats.get("flood_wait", 0) + 1
+                await asyncio.sleep(e.seconds + 2)
+            except Exception as e:
+                stats["errors"] += 1
+                consecutive_errors += 1
+                logger.warning(f"link_mode id={msg.id}: {type(e).__name__}: {e}")
+                last_id_buf = msg.id
+                save_last_id(topic_state_key, last_id_buf)
+                await asyncio.sleep(1)
+            continue
+
+        # ── Normal batch mode ─────────────────────────────────────────────────
         batch_buffer.append(msg)
         if len(batch_buffer) >= BATCH_SIZE:
             await flush_batch()
@@ -581,7 +660,8 @@ async def forward_topic_messages(client, src_entity, dst_entity,
                 break
 
     await flush_pending_album()
-    await flush_batch()
+    if not link_mode:
+        await flush_batch()
     flush_skip_log(last_id_buf)
 
     if last_id_buf:
@@ -605,6 +685,8 @@ async def run_session(client: TelegramClient, cfg: dict,
     hide_sender    = cfg.get("hide_sender", False)
     webhook_url    = cfg.get("webhook_url", "")
     auto_topic     = cfg.get("auto_topic", True)
+    link_mode      = cfg.get("link_mode", False)
+    caption_tpl    = cfg.get("caption_template") or None
 
     try:
         src_entity = await resolve_entity(client, src_raw)
@@ -658,6 +740,29 @@ async def run_session(client: TelegramClient, cfg: dict,
         pending_album["gid"]  = None
         pending_album["msgs"] = []
         pending_album["dst_topic"] = None
+
+        if link_mode:
+            # Each photo in album → individual share-link
+            for m in album:
+                try:
+                    sent = await send_as_link(
+                        client, m,
+                        dst_entity.id,
+                        dt if dt and dt != 1 else None,
+                        caption_tpl,
+                    )
+                    if sent:
+                        count += 1
+                        stats["normal"] += 1
+                        stats["links_created"] = stats.get("links_created", 0) + 1
+                    last_id_buf = m.id
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.warning(f"album link_mode id={m.id}: {e}")
+                    last_id_buf = m.id
+            return
+
         try:
             await send_msgs(client, album, dst_entity, hide_sender, dt, src_peer, dst_peer)
             count += len(album)
@@ -719,15 +824,31 @@ async def run_session(client: TelegramClient, cfg: dict,
             if pending_album["msgs"]:
                 await flush_pending()
 
-            await send_msgs(client, [msg], dst_entity, hide_sender, dst_topic, src_peer, dst_peer)
-            count += 1
-            stats["normal"] += 1
-            last_id_buf = msg.id
+            # ── Link mode: create share link instead of forwarding ────────────
+            if link_mode and _media_type_of(msg):
+                sent = await send_as_link(
+                    client, msg,
+                    dst_entity.id,
+                    dst_topic if dst_topic and dst_topic != 1 else None,
+                    caption_tpl,
+                )
+                if sent:
+                    count += 1
+                    stats["normal"] += 1
+                    stats["links_created"] = stats.get("links_created", 0) + 1
+                last_id_buf = msg.id
+                await asyncio.sleep(0.3)
+            else:
+                await send_msgs(client, [msg], dst_entity, hide_sender, dst_topic, src_peer, dst_peer)
+                count += 1
+                stats["normal"] += 1
+                last_id_buf = msg.id
 
             if count % SAVE_EVERY == 0 and last_id_buf:
                 save_last_id(key, last_id_buf)
                 if progress_cb:
-                    progress_cb({"phase": "forward", "total_forwarded": count})
+                    progress_cb({"phase": "forward", "total_forwarded": count,
+                                 "links_created": stats.get("links_created", 0)})
 
         except FloodWaitError as e:
             stats["flood_wait"] += 1
@@ -743,7 +864,10 @@ async def run_session(client: TelegramClient, cfg: dict,
     if last_id_buf:
         save_last_id(key, last_id_buf)
 
-    final_progress = {"total_forwarded": count, "errors": stats["errors"]}
+    final_progress = {
+        "total_forwarded": count, "errors": stats["errors"],
+        "links_created": stats.get("links_created", 0),
+    }
     save_session_meta(key, src_name, dst_name, "forward", cfg, progress=final_progress)
 
     if progress_cb:
@@ -755,6 +879,7 @@ async def run_session(client: TelegramClient, cfg: dict,
             "source": src_raw, "destination": dst_raw,
             "total": count, "normal": stats["normal"],
             "albums": stats["album"], "errors": stats["errors"],
+            "links_created": stats.get("links_created", 0),
         })
 
     return {"key": key, "count": count, "stats": stats}

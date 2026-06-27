@@ -90,6 +90,58 @@
   <div class="card">
     <div class="card-header"><h2 class="card-title">🎛 Tuỳ Chọn Chung</h2></div>
     <div class="form-grid">
+
+      <!-- ★ LINK MODE — key feature ★ -->
+      <div class="form-group" style="grid-column:1/-1">
+        <div class="link-mode-box" id="linkModeBox">
+          <div class="link-mode-header">
+            <label class="toggle" style="gap:12px">
+              <input type="checkbox" name="link_mode" id="linkModeToggle"
+                     onchange="toggleLinkModeUI(this.checked)" />
+              <span class="toggle-slider"></span>
+              <span style="font-size:15px;font-weight:700">🔗 Chế Độ Link — Tự Động Chuyển Media → Share Link</span>
+            </label>
+          </div>
+          <div class="link-mode-desc">
+            <table class="link-mode-table">
+              <tr>
+                <th>Loại file</th>
+                <th>Khi TẮT (forward thường)</th>
+                <th>Khi BẬT (link mode)</th>
+              </tr>
+              <tr>
+                <td>🎬 Video</td>
+                <td>Forward nguyên file video</td>
+                <td>Gửi <strong>thumbnail</strong> + nút "Nhấp để xem" → link</td>
+              </tr>
+              <tr>
+                <td>🖼️ Ảnh</td>
+                <td>Forward ảnh gốc</td>
+                <td>Gửi ảnh + caption chứa link chia sẻ</td>
+              </tr>
+              <tr>
+                <td>📄 File / Audio</td>
+                <td>Forward nguyên file</td>
+                <td>Gửi tin nhắn text với link tải file</td>
+              </tr>
+              <tr>
+                <td>💬 Văn bản</td>
+                <td>Forward nguyên văn bản</td>
+                <td>Forward nguyên văn bản (không tạo link)</td>
+              </tr>
+            </table>
+          </div>
+          <div id="linkModeExtra" class="hidden" style="margin-top:12px">
+            <div class="form-group">
+              <label>✏️ Caption Template (tuỳ chỉnh)</label>
+              <input type="text" name="caption_template" class="form-control"
+                     placeholder="🔗 Nhấp vào link để xem:\n{url}  (Enter=mặc định)" />
+              <small>Dùng <code>{url}</code> làm chỗ chèn link. Để trống = dùng template trong .env</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="form-group">
         <label>📌 Filter Nội Dung</label>
         <select name="only_filter" class="form-control">
@@ -99,20 +151,20 @@
           <option value="photo">Chỉ ảnh</option>
         </select>
       </div>
-      <div class="form-group">
+      <div class="form-group" id="hideSenderGroup">
         <label>🙈 Ẩn tên người gửi</label>
         <label class="toggle">
           <input type="checkbox" name="hide_sender" />
           <span class="toggle-slider"></span>
           <span>Tắt — giữ nguyên "Forwarded from…"</span>
         </label>
-        <small>Bật = dùng drop_author, giữ 100% nội dung: emoji premium, format, album</small>
+        <small>Bật = dùng drop_author (không áp dụng khi link mode bật)</small>
       </div>
       <div class="form-group">
         <label>🔔 Webhook URL (khi xong)</label>
         <input type="text" name="webhook_url" class="form-control"
                placeholder="https://your-webhook.com/endpoint (tuỳ chọn)" />
-        <small>Bot sẽ POST JSON tóm tắt kết quả khi hoàn thành</small>
+        <small>Bot POST JSON tóm tắt kết quả khi hoàn thành</small>
       </div>
     </div>
   </div>
@@ -164,6 +216,12 @@ function switchMode(mode) {
 function toggleEmojiInput(val) {
   document.getElementById('emoji-input-group').style.display =
     val === 'fixed' ? '' : 'none';
+}
+
+function toggleLinkModeUI(enabled) {
+  document.getElementById('linkModeExtra').classList.toggle('hidden', !enabled);
+  document.getElementById('hideSenderGroup').style.opacity = enabled ? '0.4' : '1';
+  document.getElementById('linkModeBox').classList.toggle('link-mode-active', enabled);
 }
 
 // Toggle label text based on checkbox state

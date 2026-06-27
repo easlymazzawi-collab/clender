@@ -32,9 +32,18 @@
     <div class="stat-icon">✅</div>
     <div class="stat-body">
       <div class="stat-number" id="stat-fwd">{{ progress.total_forwarded or 0 }}</div>
-      <div class="stat-label">Tin đã forward</div>
+      <div class="stat-label">Tin đã gửi</div>
     </div>
   </div>
+  {% if cfg.get('link_mode') %}
+  <div class="stat-card accent-blue">
+    <div class="stat-icon">🔗</div>
+    <div class="stat-body">
+      <div class="stat-number" id="stat-links">{{ progress.links_created or 0 }}</div>
+      <div class="stat-label">Link đã tạo</div>
+    </div>
+  </div>
+  {% else %}
   <div class="stat-card accent-purple">
     <div class="stat-icon">📋</div>
     <div class="stat-body">
@@ -46,6 +55,7 @@
       <div class="stat-label">Topics</div>
     </div>
   </div>
+  {% endif %}
   <div class="stat-card accent-orange">
     <div class="stat-icon">❌</div>
     <div class="stat-body">
@@ -177,6 +187,10 @@ evtSource.onmessage = function(e) {
     document.getElementById('stat-errors').textContent = p.errors;
   if (p.skipped !== undefined)
     document.getElementById('stat-skip').textContent = p.skipped;
+  if (p.links_created !== undefined) {
+    const el = document.getElementById('stat-links');
+    if (el) el.textContent = p.links_created;
+  }
 
   if (p.topics_done !== undefined && p.topics_total) {
     document.getElementById('stat-topics').textContent = `${p.topics_done}/${p.topics_total}`;

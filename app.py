@@ -275,6 +275,10 @@ def forwarder_start():
     if not cfg["src_raw"] or not cfg["dst_raw"]:
         return jsonify({"ok": False, "error": "Thiếu kênh nguồn hoặc đích"}), 400
 
+    # Link mode (shared between both modes)
+    cfg["link_mode"]        = f.get("link_mode") == "on"
+    cfg["caption_template"] = f.get("caption_template", "").strip() or None
+
     if mode == "backup":
         cfg["icon_mode"]    = f.get("icon_mode", "clone")
         cfg["emoji_raw"]    = f.get("emoji_raw", "").strip()

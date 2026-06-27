@@ -444,6 +444,35 @@ canvas { max-height: 220px; padding: 16px; }
 }
 pre.code-block { margin: 6px 0; }
 
+/* ─── Link-mode highlight box ────────────────────────────────────────────── */
+.link-mode-box {
+  background: var(--bg3);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  transition: border-color .3s, background .3s;
+}
+.link-mode-box.link-mode-active {
+  border-color: var(--accent);
+  background: rgba(79,142,247,0.07);
+}
+.link-mode-header { margin-bottom: 12px; }
+.link-mode-desc { margin-top: 10px; }
+.link-mode-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.link-mode-table th {
+  padding: 6px 10px; text-align: left;
+  color: var(--text-muted); font-size: 11px; text-transform: uppercase;
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+}
+.link-mode-table td {
+  padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: top;
+}
+.link-mode-table tr:last-child td { border-bottom: none; }
+.link-mode-table td:first-child { white-space: nowrap; }
+
 /* ─── Misc ────────────────────────────────────────────────────────────────── */
 .text-muted { color: var(--text-muted); }
 .hidden { display: none !important; }
