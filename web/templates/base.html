@@ -42,6 +42,14 @@
       <a href="{{ url_for('page_settings') }}" class="nav-item {% if request.endpoint == 'page_settings' %}active{% endif %}">
         <span class="nav-icon">⚙️</span> Cài Đặt
       </a>
+
+      <div class="nav-section-label">🔐 Hệ Thống</div>
+      <a href="{{ url_for('page_login') }}" class="nav-item {% if request.endpoint == 'page_login' %}active{% endif %}">
+        <span class="nav-icon">🔑</span> Đăng Nhập Telethon
+      </a>
+      <a href="{{ url_for('page_env') }}" class="nav-item {% if request.endpoint == 'page_env' %}active{% endif %}">
+        <span class="nav-icon">🔧</span> Cấu Hình .env
+      </a>
     </nav>
     <div class="sidebar-footer">
       <a href="https://t.me/" target="_blank" class="nav-item">

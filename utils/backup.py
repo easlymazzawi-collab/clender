@@ -99,14 +99,67 @@ def rotate_backups():
                 pass
 
 
+async def _ensure_backup_topic(bot, dest_chat_id: int) -> int | None:
+    """Tìm hoặc tạo topic tên 'backup' trong forum đích. Trả về topic_id."""
+    from database.models import get_setting, set_setting
+    # Cache topic id để khỏi tạo lại
+    cached = get_setting("backup_topic_id", "")
+    if cached.isdigit():
+        return int(cached)
+    try:
+        t = await bot.create_forum_topic(chat_id=dest_chat_id, name="backup")
+        tid = t.message_thread_id
+        set_setting("backup_topic_id", str(tid))
+        return tid
+    except Exception as e:
+        logger.warning(f"create backup topic: {e}")
+        return None
+
+
+def send_backup_to_telegram(zip_path: str):
+    """Gửi file backup lên topic 'backup' trong forum đích qua bot."""
+    from config.settings import BOT_TOKEN, DEST_FORUM_ID
+    if not BOT_TOKEN or not DEST_FORUM_ID:
+        logger.info("backup_to_telegram: thiếu BOT_TOKEN/DEST_FORUM_ID — bỏ qua")
+        return
+    if not zip_path or not os.path.exists(zip_path):
+        return
+
+    async def _send():
+        from telegram import Bot
+        bot = Bot(token=BOT_TOKEN)
+        tid = await _ensure_backup_topic(bot, DEST_FORUM_ID)
+        import datetime as _dt
+        cap = f"📦 Backup {_dt.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        with open(zip_path, "rb") as f:
+            await bot.send_document(
+                chat_id=DEST_FORUM_ID,
+                message_thread_id=tid,
+                document=f,
+                filename=os.path.basename(zip_path),
+                caption=cap,
+            )
+
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(_send())
+        loop.close()
+        logger.info("✅ Đã gửi backup lên topic Telegram")
+    except Exception as e:
+        logger.warning(f"send_backup_to_telegram: {e}")
+
+
 def _backup_loop():
     """Vòng lặp nền: backup mỗi INTERVAL_H giờ."""
-    # Backup ngay khi khởi động (sau 60s để hệ thống ổn định)
-    time.sleep(60)
+    to_tg = os.getenv("BACKUP_TO_TELEGRAM", "0") == "1"
+    time.sleep(60)   # chờ hệ thống ổn định
     while True:
         try:
-            create_backup()
+            path = create_backup()
             rotate_backups()
+            if to_tg and path:
+                send_backup_to_telegram(path)
         except Exception as e:
             logger.error(f"backup_loop: {e}")
         time.sleep(INTERVAL_H * 3600)

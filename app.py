@@ -261,6 +261,72 @@ def page_settings():
     return render_template("settings.html", settings=all_settings())
 
 
+# ─── Quản lý file .env qua web ─────────────────────────────────────────────────
+
+@app.route("/admin/env", methods=["GET", "POST"])
+def page_env():
+    from utils.envfile import read_env, write_env, mask
+    if request.method == "POST":
+        updates = {}
+        for k, v in request.form.items():
+            if k.startswith("env_"):
+                key = k[len("env_"):]
+                # Bỏ qua trường nhạy cảm nếu giữ nguyên mask (không sửa)
+                if v == "__KEEP__":
+                    continue
+                updates[key] = v
+        write_env(updates)
+        # Reload config trong process
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+            import importlib, config.settings
+            importlib.reload(config.settings)
+        except Exception as e:
+            logger.warning(f"reload config: {e}")
+        return redirect(url_for("page_env", saved="1"))
+
+    lines = read_env()
+    return render_template("env.html", lines=lines, mask=mask,
+                           saved=request.args.get("saved"))
+
+
+# ─── Đăng nhập Telethon qua web ────────────────────────────────────────────────
+
+@app.route("/admin/login")
+def page_login():
+    return render_template("login.html", ready=_telethon_ready)
+
+
+@app.route("/api/login/start", methods=["POST"])
+def api_login_start():
+    from forwarder.web_auth import get_web_auth
+    phone = (request.json or {}).get("phone", "").strip()
+    if not phone:
+        return jsonify({"ok": False, "error": "Thiếu số điện thoại"})
+    return jsonify(get_web_auth().start_login(phone))
+
+
+@app.route("/api/login/code", methods=["POST"])
+def api_login_code():
+    from forwarder.web_auth import get_web_auth
+    code = (request.json or {}).get("code", "").strip()
+    result = get_web_auth().submit_code(code)
+    if result.get("done"):
+        _init_telethon()   # nạp session mới
+    return jsonify(result)
+
+
+@app.route("/api/login/password", methods=["POST"])
+def api_login_password():
+    from forwarder.web_auth import get_web_auth
+    pw = (request.json or {}).get("password", "")
+    result = get_web_auth().submit_password(pw)
+    if result.get("done"):
+        _init_telethon()
+    return jsonify(result)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FORWARDER PAGES
 # ══════════════════════════════════════════════════════════════════════════════
