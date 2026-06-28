@@ -38,7 +38,7 @@
           <td class="caption-cell" title="{{ l.caption or '' }}">
             {{ (l.caption or '')[:40] }}{% if l.caption and l.caption|length > 40 %}…{% endif %}
           </td>
-          <td>{{ l.access_count }}</td>
+          <td class="view-count">{{ l.access_count }}</td>
           <td>{{ l.uploader_name or '–' }}</td>
           <td class="date">{{ l.created_at }}</td>
           <td>
@@ -80,5 +80,18 @@ async function deleteLink(token) {
     document.querySelector(`tr[data-token="${token}"]`)?.remove();
   }
 }
+
+async function refreshViewCounts() {
+  const res = await fetch('/api/links?limit=100');
+  const j = await res.json();
+  if (!j.ok) return;
+  for (const l of j.data) {
+    const row = document.querySelector(`tr[data-token="${l.token}"]`);
+    const cell = row?.querySelector('.view-count');
+    if (cell) cell.textContent = l.access_count ?? 0;
+  }
+}
+
+setInterval(refreshViewCounts, 15000);
 </script>
 {% endblock %}

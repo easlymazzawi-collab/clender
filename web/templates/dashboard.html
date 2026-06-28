@@ -71,13 +71,13 @@
           <th>Hành động</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="recentLinksBody">
         {% for l in recent_links %}
-        <tr>
+        <tr data-token="{{ l.token }}">
           <td><code class="token">{{ l.token }}</code></td>
           <td><span class="badge badge-{{ l.file_type }}">{{ l.file_type }}</span></td>
           <td class="filename">{{ l.file_name or '–' }}</td>
-          <td>{{ l.access_count }}</td>
+          <td class="view-count">{{ l.access_count }}</td>
           <td class="date">{{ l.created_at }}</td>
           <td>
             <a href="{{ base_url }}/d/{{ l.token }}" target="_blank" class="btn btn-xs">🔗</a>
@@ -176,13 +176,11 @@ async function refreshStats() {
   const j = await res.json();
   const d = j.data;
 
-  // Update stat cards
   document.querySelectorAll('.stat-number')[0].textContent = d.total_links;
   document.querySelectorAll('.stat-number')[1].textContent = d.total_views;
   document.querySelectorAll('.stat-number')[2].textContent = d.total_topics;
   document.querySelectorAll('.stat-number')[3].textContent = d.total_forwards;
 
-  // Update type chart
   if (window._typeChart) {
     const types = Object.keys(d.by_type);
     const counts = Object.values(d.by_type);
@@ -191,6 +189,29 @@ async function refreshStats() {
     window._typeChart.update();
   }
 }
+
+async function refreshRecentLinks() {
+  const res = await fetch('/api/links?limit=5');
+  const j = await res.json();
+  if (!j.ok) return;
+  const tbody = document.getElementById('recentLinksBody');
+  if (!tbody) return;
+  const base = {{ base_url | tojson }};
+  tbody.innerHTML = j.data.map(l => `
+    <tr data-token="${l.token}">
+      <td><code class="token">${l.token}</code></td>
+      <td><span class="badge badge-${l.file_type}">${l.file_type}</span></td>
+      <td class="filename">${l.file_name || '–'}</td>
+      <td class="view-count">${l.access_count ?? 0}</td>
+      <td class="date">${l.created_at || ''}</td>
+      <td>
+        <a href="${base}/d/${l.token}" target="_blank" class="btn btn-xs">🔗</a>
+        <button class="btn btn-xs btn-danger" onclick="deleteLink('${l.token}')">🗑️</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có link nào</td></tr>';
+}
+
+setInterval(() => { refreshStats(); refreshRecentLinks(); }, 15000);
 
 async function deleteLink(token) {
   if (!confirm(`Xóa link ${token}?`)) return;

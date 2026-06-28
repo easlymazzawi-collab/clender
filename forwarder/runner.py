@@ -176,6 +176,7 @@ async def _register_real_key(client, cfg, mode, session_info, tmp_key, runner):
     with runner._lock:
         session_info["real_key"] = real_key
         session_info["key"] = real_key
+        session_info["status"] = "running"
         if real_key != tmp_key:
             runner._sessions[real_key] = session_info
             runner._sessions.pop(tmp_key, None)

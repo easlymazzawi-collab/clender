@@ -333,24 +333,75 @@ def api_login_password():
 # FORWARDER PAGES
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/forwarder")
-def forwarder_dashboard():
+_ACTIVE_FWD = frozenset({"starting", "running", "stopping"})
+
+
+def _find_live_session(key: str) -> tuple[str | None, dict | None]:
+    """Resolve pending/tmp/real key → (memory key, live session dict)."""
+    live = _runner.all_statuses()
+    if key in live and live[key].get("status"):
+        return key, live[key]
+    for k, v in live.items():
+        if not v.get("status"):
+            continue
+        if v.get("real_key") == key or v.get("tmp_key") == key or v.get("key") == key:
+            return k, v
+    resolved = _runner._resolve_key(key)
+    if resolved and resolved in live and live[resolved].get("status"):
+        return resolved, live[resolved]
+    st = _runner.get_status(key)
+    if st.get("status"):
+        return resolved or key, st
+    return None, None
+
+
+def _merge_fwd_sessions() -> list[dict]:
+    """Gộp DB + phiên đang chạy trong RAM (kể cả pending_*)."""
     sessions = db_list_sessions(limit=100)
-    live     = _runner.all_statuses()
-    # Merge live status into DB rows
+    live = _runner.all_statuses()
+    matched: set[str] = set()
+
     for s in sessions:
-        if s["key"] in live:
-            s["live"] = live[s["key"]]
-        elif any(s["key"] == v.get("real_key") for v in live.values()):
-            for v in live.values():
-                if v.get("real_key") == s["key"]:
-                    s["live"] = v
-                    break
+        _canon, lv = _find_live_session(s["key"])
+        if lv:
+            s["live"] = lv
+            s["live_key"] = _canon or s["key"]
+            matched.update(filter(None, (_canon, lv.get("real_key"), lv.get("tmp_key"), s["key"])))
+            s["progress"] = lv.get("progress") or s.get("progress") or {}
         else:
             s["live"] = None
+            s["live_key"] = s["key"]
+
+    for k, v in live.items():
+        if k in matched or not v.get("status"):
+            continue
+        rk = v.get("real_key")
+        if rk and any(row["key"] == rk for row in sessions):
+            continue
+        cfg = v.get("cfg") or {}
+        sessions.insert(0, {
+            "key": rk or k,
+            "live_key": k,
+            "src_name": cfg.get("src_raw", "…"),
+            "dst_name": cfg.get("dst_raw", "…"),
+            "mode": v.get("mode", "forward"),
+            "status": v.get("status", "starting"),
+            "progress": v.get("progress") or {},
+            "cfg": cfg,
+            "live": v,
+            "created_str": "—",
+            "updated_str": "Đang chạy",
+        })
+        matched.add(k)
+
+    return sessions
+
+
+@app.route("/forwarder")
+def forwarder_dashboard():
     return render_template(
         "forwarder_dashboard.html",
-        sessions=sessions,
+        sessions=_merge_fwd_sessions(),
         telethon_ready=_telethon_ready,
         telethon_error=_telethon_error,
     )
@@ -431,17 +482,17 @@ def forwarder_start():
 
 @app.route("/forwarder/session/<key>")
 def forwarder_session(key: str):
-    live = _runner.get_status(key)
-    if not live:
-        # Try real_key lookup
-        for v in _runner.all_statuses().values():
-            if v.get("real_key") == key:
-                live = v
-                break
-    # Fall back to DB
-    db_s = db_get_session(key)
-    return render_template("forwarder_session.html", key=key,
-                           live=live, db_session=db_s)
+    _canon, live = _find_live_session(key)
+    if live and live.get("real_key") and key.startswith("pending_") and key != live["real_key"]:
+        return redirect(url_for("forwarder_session", key=live["real_key"]))
+    page_key = (live.get("real_key") if live else None) or _canon or key
+    db_s = db_get_session(page_key) or db_get_session(key)
+    return render_template(
+        "forwarder_session.html",
+        key=page_key,
+        live=live or {},
+        db_session=db_s,
+    )
 
 
 @app.route("/forwarder/stop/<key>", methods=["POST"])
@@ -494,15 +545,9 @@ def forwarder_stream(key: str):
     def generate():
         last_log_idx = 0
         for _ in range(600):   # max 10 min at 1s interval
-            status = _runner.get_status(key)
-            if not status:
-                # Check by real_key
-                for v in _runner.all_statuses().values():
-                    if v.get("real_key") == key:
-                        status = v
-                        break
+            _canon, status = _find_live_session(key)
 
-            if status:
+            if status and status.get("status"):
                 log = status.get("log", [])
                 new_lines = log[last_log_idx:]
                 last_log_idx = len(log)
@@ -597,24 +642,19 @@ def api_settings():
 
 @app.route("/api/forwarder/sessions")
 def api_fwd_sessions():
-    sessions = db_list_sessions(limit=100)
-    live = _runner.all_statuses()
+    sessions = _merge_fwd_sessions()
     for s in sessions:
-        s["is_running"] = _runner.is_running(s["key"]) or any(
-            v.get("real_key") == s["key"] for v in live.values()
-        )
+        lv = s.get("live") or {}
+        s["is_running"] = bool(lv.get("status") in _ACTIVE_FWD) or _runner.is_running(s["key"])
     return jsonify({"ok": True, "data": sessions})
 
 
 @app.route("/api/forwarder/session/<key>")
 def api_fwd_session(key: str):
-    live = _runner.get_status(key) or {}
-    for v in _runner.all_statuses().values():
-        if v.get("real_key") == key:
-            live = v
-            break
-    db_s = db_get_session(key) or {}
-    return jsonify({"ok": True, "live": live, "db": db_s})
+    _canon, live = _find_live_session(key)
+    page_key = (live.get("real_key") if live else None) or _canon or key
+    db_s = db_get_session(page_key) or db_get_session(key) or {}
+    return jsonify({"ok": True, "live": live or {}, "db": db_s, "key": page_key})
 
 
 # ─── Error handlers ───────────────────────────────────────────────────────────

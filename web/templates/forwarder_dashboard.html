@@ -54,7 +54,8 @@
       <tbody>
         {% for s in sessions %}
         {% set live = s.live %}
-        {% set prog = s.progress or {} %}
+        {% set prog = (live.progress if live else {}) or s.progress or {} %}
+        {% set session_key = s.live_key or s.key %}
         <tr id="row-{{ s.key }}">
           <td>
             {% if s.mode == 'backup' %}
@@ -79,8 +80,8 @@
             </div>
           </td>
           <td>
-            {% if live and live.status == 'running' %}
-              <span class="badge badge-active pulse">▶ Đang chạy</span>
+            {% if live and live.status in ('running', 'starting') %}
+              <span class="badge badge-active pulse">▶ {% if live.status == 'starting' %}Đang khởi động{% else %}Đang chạy{% endif %}</span>
             {% elif live and live.status == 'stopping' %}
               <span class="badge badge-orange">⏹ Đang dừng…</span>
             {% elif live and live.status == 'done' %}
@@ -97,9 +98,9 @@
           </td>
           <td class="datestr" title="Tạo: {{ s.created_str }}">{{ s.updated_str }}</td>
           <td>
-            <a href="{{ url_for('forwarder_session', key=s.key) }}" class="btn btn-xs" title="Chi tiết">📊</a>
-            {% if live and live.status in ('running', 'starting') %}
-              <button class="btn btn-xs btn-warn" onclick="stopSession('{{ s.key }}')" title="Tạm dừng">⏸</button>
+            <a href="{{ url_for('forwarder_session', key=session_key) }}" class="btn btn-xs" title="Chi tiết">📊</a>
+            {% if live and live.status in ('running', 'starting', 'stopping') %}
+              <button class="btn btn-xs btn-warn" onclick="stopSession('{{ session_key }}')" title="Tạm dừng">⏸</button>
             {% else %}
               <button class="btn btn-xs btn-success" onclick="resumeSession('{{ s.key }}')" title="Tiếp tục">▶️</button>
               <form method="POST" action="{{ url_for('forwarder_delete', key=s.key) }}"
@@ -202,7 +203,7 @@ async function stopSession(key) {
 
 async function resumeSession(key) {
   showToast('▶️ Đang tiếp tục từ chỗ dừng…');
-  const res = await fetch(`/forwarder/resume/${key}`, { method: 'POST' });
+  const res = await fetch(`/forwarder/resume/${key}`, { method: 'POST', redirect: 'follow' });
   if (res.redirected) {
     window.location.href = res.url;
     return;
@@ -214,5 +215,73 @@ async function resumeSession(key) {
     setTimeout(() => location.reload(), 1500);
   }
 }
+
+function statusBadge(live, dbStatus) {
+  if (live && ['running', 'starting'].includes(live.status)) {
+    const label = live.status === 'starting' ? 'Đang khởi động' : 'Đang chạy';
+    return `<span class="badge badge-active pulse">▶ ${label}</span>`;
+  }
+  if (live && live.status === 'stopping') {
+    return `<span class="badge badge-orange">⏹ Đang dừng…</span>`;
+  }
+  if (live && live.status === 'done') {
+    return `<span class="badge badge-active">✅ Hoàn thành</span>`;
+  }
+  if (live && live.status === 'error') {
+    const err = live.error ? ` title="${live.error.replace(/"/g, '&quot;')}"` : '';
+    return `<span class="badge badge-danger"${err}>❌ Lỗi</span>`;
+  }
+  if (dbStatus === 'done') return `<span class="badge badge-active">✅ Hoàn thành</span>`;
+  if (dbStatus === 'error') return `<span class="badge badge-danger">❌ Lỗi</span>`;
+  return `<span class="badge badge-gray">⏸ Dừng</span>`;
+}
+
+function progressHtml(prog) {
+  const parts = [];
+  if (prog.total_forwarded) parts.push(`✅ ${prog.total_forwarded} msg`);
+  if (prog.topics_done && prog.topics_total) {
+    parts.push(` · ${prog.topics_done}/${prog.topics_total} topic`);
+  }
+  let html = parts.join('');
+  if (prog.current_topic) {
+    html += `<br/><small class="text-muted">🗂 ${prog.current_topic}</small>`;
+  }
+  return html || '–';
+}
+
+async function pollSessions() {
+  try {
+    const res = await fetch('/api/forwarder/sessions');
+    const j = await res.json();
+    if (!j.ok) return;
+    let anyActive = false;
+    for (const s of j.data) {
+      const row = document.getElementById(`row-${s.key}`);
+      if (!row) continue;
+      const live = s.live || {};
+      const prog = live.progress || s.progress || {};
+      const sessionKey = s.live_key || s.key;
+      if (live.status && ['running', 'starting', 'stopping'].includes(live.status)) {
+        anyActive = true;
+      }
+      const progCell = row.querySelector('.progress-mini');
+      if (progCell) progCell.innerHTML = progressHtml(prog);
+      const statusCell = row.cells[4];
+      if (statusCell) statusCell.innerHTML = statusBadge(live, s.status);
+      const actionCell = row.cells[6];
+      if (actionCell && live.status && ['running', 'starting', 'stopping'].includes(live.status)) {
+        actionCell.innerHTML = `
+          <a href="/forwarder/session/${sessionKey}" class="btn btn-xs" title="Chi tiết">📊</a>
+          <button class="btn btn-xs btn-warn" onclick="stopSession('${sessionKey}')" title="Tạm dừng">⏸</button>`;
+      }
+    }
+    if (anyActive) {
+      setTimeout(pollSessions, 2000);
+    }
+  } catch (_) {}
+}
+
+setInterval(pollSessions, 3000);
+pollSessions();
 </script>
 {% endblock %}

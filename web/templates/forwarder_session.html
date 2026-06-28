@@ -3,9 +3,9 @@
 {% block page_title %}📊 Chi Tiết Phiên{% endblock %}
 
 {% block content %}
-{% set status = (live.status if live else db_session.status) or 'unknown' %}
-{% set progress = (live.progress if live else db_session.progress) or {} %}
-{% set cfg = (live.cfg if live else db_session.cfg) or {} %}
+{% set status = live.get('status') or (db_session.status if db_session else 'unknown') %}
+{% set progress = live.get('progress') or (db_session.progress if db_session else {}) or {} %}
+{% set cfg = live.get('cfg') or (db_session.cfg if db_session else {}) or {} %}
 
 <!-- Status bar -->
 <div class="stat-card accent-{% if status == 'running' %}green{% elif status == 'done' %}blue{% elif status == 'error' %}orange{% else %}purple{% endif %}" style="margin-bottom:0">
@@ -19,7 +19,7 @@
     </div>
   </div>
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-    {% if status in ('running', 'starting') %}
+    {% if status in ('running', 'starting', 'stopping') %}
     <button class="btn btn-warn" onclick="stopSession()">⏸ Tạm dừng</button>
     {% else %}
     <button class="btn btn-success" onclick="resumeSession()">▶️ Tiếp tục</button>
@@ -142,7 +142,7 @@
     </div>
   </div>
   <div id="logBox" class="log-box">
-    {% if live and live.log %}
+    {% if live.get('log') %}
       {% for line in live.log %}
       <div class="log-line">{{ line }}</div>
       {% endfor %}
@@ -179,7 +179,7 @@ function clearLog() {
 }
 
 // ── SSE real-time updates ──────────────────────────────────────────────────
-{% if status == 'running' or status == 'starting' %}
+{% if status in ('running', 'starting', 'stopping') %}
 const evtSource = new EventSource(`/forwarder/stream/${SESSION_KEY}`);
 
 evtSource.onmessage = function(e) {
@@ -245,6 +245,26 @@ evtSource.onerror = function() {
   showToast('⚠️ Mất kết nối SSE. Tự động tải lại…', 3000);
   setTimeout(() => location.reload(), 3000);
 };
+{% else %}
+// Chờ real_key / trạng thái live (redirect từ pending_*)
+(function waitLive() {
+  fetch(`/api/forwarder/session/${SESSION_KEY}`)
+    .then(r => r.json())
+    .then(j => {
+      if (!j.ok) return;
+      const st = (j.live && j.live.status) || (j.db && j.db.status);
+      if (j.key && j.key !== SESSION_KEY && SESSION_KEY.startsWith('pending_')) {
+        window.location.replace(`/forwarder/session/${j.key}`);
+        return;
+      }
+      if (st && ['running', 'starting', 'stopping'].includes(st)) {
+        location.reload();
+        return;
+      }
+      setTimeout(waitLive, 1500);
+    })
+    .catch(() => setTimeout(waitLive, 2000));
+})();
 {% endif %}
 </script>
 {% endblock %}
