@@ -1,0 +1,51 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ─── Telegram Bot (python-telegram-bot) ──────────────────────────────────────
+BOT_TOKEN    = os.getenv("BOT_TOKEN", "")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")   # e.g. "hongcliprobot" (no @)
+ADMIN_IDS    = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+
+# ─── Link mode ────────────────────────────────────────────────────────────────
+# "bot" : link trỏ thẳng t.me/BOT_USERNAME?start=TOKEN (đơn giản, nhưng nếu đổi
+#         bot mà mất username → link cũ chết)
+# "web" : link trỏ qua web server BASE_URL/d/TOKEN → redirect sang bot hiện tại
+#         → ĐỔI BOT chỉ cần đổi BOT_USERNAME, link cũ VẪN SỐNG (cần domain/VPS)
+LINK_MODE = os.getenv("LINK_MODE", "bot")
+
+# ─── Telethon (user account — for forum forwarder) ───────────────────────────
+TELETHON_API_ID   = int(os.getenv("TELETHON_API_ID", "0"))
+TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "")
+TELETHON_PHONE    = os.getenv("TELETHON_PHONE", "")
+TELETHON_SESSION  = os.getenv("TELETHON_SESSION", "session_main")
+
+# ─── Source / Destination Forums (Bot) ───────────────────────────────────────
+SOURCE_FORUM_ID = int(os.getenv("SOURCE_FORUM_ID", "0"))
+DEST_FORUM_ID   = int(os.getenv("DEST_FORUM_ID", "0"))
+
+# ─── Web Server ───────────────────────────────────────────────────────────────
+WEB_HOST   = os.getenv("WEB_HOST", "0.0.0.0")
+WEB_PORT   = int(os.getenv("WEB_PORT", "5000"))
+BASE_URL   = os.getenv("BASE_URL", "http://localhost:5000")
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+DB_PATH = os.getenv("DB_PATH", "database/forum_bot.db")
+
+# ─── Media Storage ────────────────────────────────────────────────────────────
+MEDIA_DIR        = os.getenv("MEDIA_DIR", "media")
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
+
+# ─── Bot Clone Settings ───────────────────────────────────────────────────────
+CLONE_DELAY_SECONDS = float(os.getenv("CLONE_DELAY_SECONDS", "1.5"))
+THUMBNAIL_QUALITY   = int(os.getenv("THUMBNAIL_QUALITY", "85"))
+
+# ─── Link caption template ────────────────────────────────────────────────────
+# python-dotenv reads \n as literal two chars, not a newline.
+# Replace \\n → real newline so templates in .env work correctly.
+LINK_CAPTION_TEMPLATE = os.getenv(
+    "LINK_CAPTION_TEMPLATE",
+    "🔗 Nhấp vào link để xem:\n{url}"
+).replace("\\n", "\n")

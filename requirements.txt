@@ -1,0 +1,22 @@
+# ══════════════════════════════════════════════════════════════
+#  Forum Converter Bot — Dependencies
+# ══════════════════════════════════════════════════════════════
+
+# ── BOT (Bot API — chia sẻ link, serve media, admin panel) ──────
+python-telegram-bot[job-queue]==21.6   # Bot Telegram chính thức (async)
+
+# ── USERBOT (Telethon — clone forum bằng tài khoản user) ────────
+telethon==1.36.0    # Userbot client (clone topics, forward, đọc forum)
+cryptg==0.4.0       # Tăng tốc mã hóa cho Telethon (C, nhanh hơn nhiều)
+
+# ── WEB ADMIN (Flask dashboard + REST API + SSE) ────────────────
+flask==3.0.3        # Web server (dashboard, API, SSE stream)
+gunicorn==22.0.0    # WSGI server cho production (tuỳ chọn)
+
+# ── DÙNG CHUNG ──────────────────────────────────────────────────
+python-dotenv==1.0.1   # Đọc cấu hình từ file .env
+aiohttp==3.9.5         # Gọi webhook bất đồng bộ (thông báo khi xong)
+
+# ── Thư viện chuẩn Python (không cần cài) ───────────────────────
+# sqlite3, asyncio, threading, json, re, time, io, secrets,
+# subprocess, tempfile, datetime, logging, os, sys

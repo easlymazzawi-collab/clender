@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Cài Đặt – Forum Bot Admin{% endblock %}
+{% block page_title %}⚙️ Cài Đặt Bot{% endblock %}
+
+{% block content %}
+<form method="POST" action="{{ url_for('page_settings') }}">
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">📝 Tuỳ chỉnh Caption Link</h2>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Template Caption</label>
+        <textarea name="setting_caption_template" class="form-control" rows="3"
+                  placeholder="🔗 Nhấp vào link để xem:\n{url}">{{ settings.get('caption_template', '') }}</textarea>
+        <small>Dùng <code>{url}</code> làm chỗ chèn link.</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">🤖 Tuỳ chỉnh Bot</h2>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Thông điệp chào mừng</label>
+        <textarea name="setting_welcome_msg" class="form-control" rows="3"
+                  placeholder="Xin chào! Tôi là Forum Bot...">{{ settings.get('welcome_msg', '') }}</textarea>
+      </div>
+      <div class="form-group">
+        <label>Chế độ forward mặc định</label>
+        <select name="setting_default_forward_mode" class="form-control">
+          <option value="named" {% if settings.get('default_forward_mode') == 'named' %}selected{% endif %}>Có tên (Named)</option>
+          <option value="anonymous" {% if settings.get('default_forward_mode') == 'anonymous' %}selected{% endif %}>Ẩn tên (Anonymous)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Delay clone (giây)</label>
+        <input type="number" name="setting_clone_delay" class="form-control"
+               value="{{ settings.get('clone_delay', '1.5') }}" step="0.5" min="0" max="30" />
+      </div>
+      <div class="form-group">
+        <label>Tự động tạo link khi nhận media</label>
+        <select name="setting_auto_link" class="form-control">
+          <option value="1" {% if settings.get('auto_link', '1') == '1' %}selected{% endif %}>Bật</option>
+          <option value="0" {% if settings.get('auto_link', '1') == '0' %}selected{% endif %}>Tắt</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">🔒 Thông Tin Hệ Thống</h2>
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Base URL (chỉ đọc)</label>
+        <input type="text" class="form-control" value="{{ request.host_url }}" readonly />
+      </div>
+      <div class="form-group">
+        <label>Số lượng link đang hoạt động</label>
+        <input type="text" class="form-control" id="linkCountDisplay" value="Đang tải…" readonly />
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom settings key/value -->
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">🗂️ Tất Cả Cài Đặt Tuỳ Chỉnh</h2>
+    </div>
+    {% if settings %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr><th>Khoá</th><th>Giá trị</th><th>Chỉnh sửa</th></tr>
+        </thead>
+        <tbody>
+          {% for k, v in settings.items() %}
+          <tr>
+            <td><code>{{ k }}</code></td>
+            <td>
+              <input type="text" name="setting_{{ k }}" class="form-control-inline"
+                     value="{{ v }}" />
+            </td>
+            <td>–</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">Chưa có cài đặt nào. Dùng lệnh <code>/set &lt;key&gt; &lt;value&gt;</code> trong bot.</p>
+    {% endif %}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">💾 Lưu Cài Đặt</button>
+    <a href="{{ url_for('dashboard') }}" class="btn">↩️ Quay lại</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+fetch('/api/stats').then(r => r.json()).then(j => {
+  document.getElementById('linkCountDisplay').value = j.data.total_links + ' link đang hoạt động';
+});
+</script>
+{% endblock %}

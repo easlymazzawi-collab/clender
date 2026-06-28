@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Chủ Đề – Forum Bot Admin{% endblock %}
+{% block page_title %}📋 Chủ Đề Đã Clone{% endblock %}
+
+{% block content %}
+<div class="card info-card">
+  <div class="info-icon">💡</div>
+  <div>
+    <strong>Cách clone chủ đề:</strong>
+    Trong forum nguồn, vào chủ đề cần clone → gõ lệnh
+    <code>/clone_topic Tên Chủ Đề</code>.
+    Bot sẽ tạo chủ đề tương ứng ở forum đích (mapping). Clone/backup tin nhắn dùng Telethon Forwarder trên web.
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">{{ topics|length }} chủ đề đang theo dõi</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Tên Chủ Đề</th>
+          <th>Forum Nguồn (ID)</th>
+          <th>Topic ID Nguồn</th>
+          <th>Forum Đích (ID)</th>
+          <th>Topic ID Đích</th>
+          <th>💬 Tin nhắn</th>
+          <th>Ngày Clone</th>
+          <th>Đồng bộ cuối</th>
+          <th>Trạng thái</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in topics %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><strong>{{ t.topic_name or '–' }}</strong></td>
+          <td><code>{{ t.source_chat_id }}</code></td>
+          <td><code>{{ t.source_topic_id or 'General' }}</code></td>
+          <td><code>{{ t.dest_chat_id }}</code></td>
+          <td><code>{{ t.dest_topic_id or '–' }}</code></td>
+          <td>{{ t.msg_count }}</td>
+          <td class="date">{{ t.cloned_at }}</td>
+          <td class="date">{{ t.last_synced_at or '–' }}</td>
+          <td>
+            {% if t.is_active %}
+              <span class="badge badge-active">Đang hoạt động</span>
+            {% else %}
+              <span class="badge badge-inactive">Tắt</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="empty">Chưa có chủ đề nào được clone</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">📖 Hướng dẫn hoạt động</h2>
+  </div>
+  <div class="guide-steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>Thêm bot vào cả 2 forum</strong>
+        <p>Bot cần quyền Admin để gửi tin nhắn và tạo chủ đề.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Cấu hình forum đích</strong>
+        <p>Đặt <code>DEST_FORUM_ID</code> trong file <code>.env</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Clone chủ đề</strong>
+        <p>Vào chủ đề nguồn → gõ <code>/clone_topic Tên</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <strong>Tin nhắn mới:</strong>
+        <p>Dùng <strong>Telethon Forwarder</strong> (web → Tạo phiên) để clone/backup forum. Bot <code>/clone_topic</code> chỉ tạo mapping topic, không tự sync realtime.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
