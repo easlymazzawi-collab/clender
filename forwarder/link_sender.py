@@ -8,10 +8,11 @@ Giữ premium emoji qua formatting_entities (cắt caption an toàn UTF-16).
 import copy
 import io
 import logging
+import asyncio
 from typing import Optional
 
 from telethon import TelegramClient
-from telethon.tl.types import Message, DocumentAttributeFilename
+from telethon.tl.types import Message, DocumentAttributeFilename, MessageEntityCustomEmoji
 from telethon.errors import (
     MessageNotModifiedError,
     FloodWaitError,
@@ -58,9 +59,16 @@ def _utf16_len(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
 
 
+def _clone_entities(entities: list) -> list:
+    """Deep-clone TL entities — tránh lệch offset khi tái sử dụng."""
+    if not entities:
+        return []
+    return copy.deepcopy(list(entities))
+
+
 def _shift_entities(entities: list, offset_utf16: int) -> list:
     if not entities or offset_utf16 == 0:
-        return entities
+        return _clone_entities(entities)
     shifted = []
     for e in entities:
         try:
@@ -114,12 +122,12 @@ def _build_caption_entities(orig_text: str, orig_entities: list,
         suffix = tpl_with_url[idx + len("{caption}"):]
         final_text = prefix + orig_text + suffix
         offset = _utf16_len(prefix)
-        final_entities = _shift_entities(orig_entities, offset)
+        final_entities = _shift_entities(_clone_entities(orig_entities), offset)
     else:
         link_block = tpl.format(url=url)
         if orig_text:
             final_text = f"{orig_text}\n\n{link_block}"
-            final_entities = orig_entities
+            final_entities = _clone_entities(orig_entities)
         else:
             final_text = link_block
             final_entities = []
@@ -134,11 +142,30 @@ def _pick_best_caption_msg(msgs: list) -> Message:
         text, ents = _get_caption_raw(m)
         if not text.strip():
             continue
-        premium = sum(1 for e in ents if getattr(e, "custom_emoji_id", None))
+        premium = sum(1 for e in ents if isinstance(e, MessageEntityCustomEmoji))
         score = premium * 1000 + len(ents) * 10 + len(text)
         if score > best_score:
             best_score, best = score, m
     return best
+
+
+async def _get_caption_raw_loaded(client: TelegramClient,
+                                  msg: Message) -> tuple[str, list]:
+    """
+    Lấy caption + entities từ message nguồn.
+    iter_messages đôi khi thiếu entities → luôn tải lại khi có caption.
+    """
+    text, ents = _get_caption_raw(msg)
+    if not text.strip():
+        return text, _clone_entities(ents)
+    try:
+        fresh = await client.get_messages(msg.peer_id, ids=msg.id)
+        if fresh:
+            t2, e2 = _get_caption_raw(fresh)
+            return t2, _clone_entities(e2)
+    except Exception as e:
+        logger.debug(f"_get_caption_raw_loaded id={msg.id}: {e}")
+    return text, _clone_entities(ents)
 
 
 # ─── Media type ───────────────────────────────────────────────────────────────
@@ -229,14 +256,37 @@ async def _download_preview(client: TelegramClient, msg: Message) -> Optional[io
     return None
 
 
+async def _apply_caption_after_send(client, dst_entity, sent, text: str,
+                                    entities: list) -> object:
+    """
+    Gửi media xong → edit caption kèm formatting_entities.
+    Cách này ổn định premium emoji hơn gắn entities lúc send_file.
+    """
+    if not sent or not entities:
+        return sent
+    target = sent[-1] if isinstance(sent, list) else sent
+    msg_id = getattr(target, "id", None)
+    if not msg_id:
+        return sent
+    await asyncio.sleep(0.35)
+    ok = await edit_caption_safe(client, dst_entity, msg_id, text, entities)
+    if not ok:
+        logger.warning(f"post-send caption edit failed id={msg_id}")
+    return sent
+
+
 async def _send_text_caption(client, dst_entity, text: str, entities: list,
                              head: str = "", **kw) -> object:
     body = f"{head}\n\n{text}" if head else text
     body, entities = _truncate_caption_utf16(body[:4096], entities, max_utf16=4096)
-    return await client.send_message(
+    sent = await client.send_message(
         dst_entity, message=body,
-        formatting_entities=entities or None, **kw,
+        formatting_entities=None,
+        **kw,
     )
+    if entities:
+        await _apply_caption_after_send(client, dst_entity, sent, body, entities)
+    return sent
 
 
 # ─── Edit caption (relink + post-edit) ────────────────────────────────────────
@@ -280,7 +330,7 @@ async def send_preview_single(
     dst_entity, dst_topic_id: Optional[int],
     caption_template: Optional[str] = None,
 ) -> object:
-    orig_text, orig_ent = _get_caption_raw(msg)
+    orig_text, orig_ent = await _get_caption_raw_loaded(client, msg)
     token, url = store_single_token(msg)
     full_cap, full_ent = _build_caption_entities(orig_text, orig_ent, url, caption_template)
 
@@ -291,13 +341,16 @@ async def send_preview_single(
     preview = await _download_preview(client, msg)
     if preview:
         try:
-            return await client.send_file(
+            sent = await client.send_file(
                 dst_entity, file=preview,
                 caption=full_cap,
-                formatting_entities=full_ent or None,
+                formatting_entities=None,
                 force_document=False,
                 **kw,
             )
+            if full_ent:
+                await _apply_caption_after_send(client, dst_entity, sent, full_cap, full_ent)
+            return sent
         except Exception as e:
             logger.warning(f"send_preview_single send_file id={msg.id}: {e}")
 
@@ -318,7 +371,7 @@ async def send_preview_album(
         return []
 
     cap_msg = _pick_best_caption_msg(msgs)
-    orig_text, orig_ent = _get_caption_raw(cap_msg)
+    orig_text, orig_ent = await _get_caption_raw_loaded(client, cap_msg)
     token, url = store_album_token(msgs)
     full_cap, full_ent = _build_caption_entities(orig_text, orig_ent, url, caption_template)
 
@@ -337,18 +390,21 @@ async def send_preview_album(
         return [s]
 
     n = len(previews)
-    captions = [""] * (n - 1) + [full_cap]
-    fmt_entities = [None] * (n - 1) + [full_ent or None]
+    # Caption trên item đầu — Telegram album hiển thị caption item đầu tiên
+    captions = [full_cap] + [""] * (n - 1)
 
     try:
         result = await client.send_file(
             dst_entity, file=previews,
             caption=captions,
-            formatting_entities=fmt_entities,
+            formatting_entities=None,
             force_document=False,
             **kw,
         )
-        return result if isinstance(result, list) else ([result] if result else [])
+        out = result if isinstance(result, list) else ([result] if result else [])
+        if full_ent and out:
+            await _apply_caption_after_send(client, dst_entity, out[0], full_cap, full_ent)
+        return out
     except Exception as e:
         logger.warning(f"send_preview_album ({n} items): {e}")
         try:
