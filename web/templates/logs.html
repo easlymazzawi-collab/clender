@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Lịch Sử Forward – Forum Bot Admin{% endblock %}
+{% block page_title %}📜 Lịch Sử Forward{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">{{ logs|length }} bản ghi</h2>
+    <div class="header-actions">
+      <select id="modeFilter" class="input-sm" onchange="filterLogs()">
+        <option value="">Tất cả chế độ</option>
+        <option value="named">Có tên</option>
+        <option value="anonymous">Ẩn tên</option>
+        <option value="clone">Auto-clone</option>
+      </select>
+      <select id="statusFilter" class="input-sm" onchange="filterLogs()">
+        <option value="">Tất cả trạng thái</option>
+        <option value="ok">✅ Thành công</option>
+        <option value="error">❌ Lỗi</option>
+      </select>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="table" id="logsTable">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Chế độ</th>
+          <th>Chat nguồn</th>
+          <th>Msg ID nguồn</th>
+          <th>Chat đích</th>
+          <th>Msg ID đích</th>
+          <th>Token Media</th>
+          <th>Trạng thái</th>
+          <th>Thời gian</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in logs %}
+        <tr data-mode="{{ l.forward_mode }}" data-status="{{ 'ok' if l.status == 'ok' else 'error' }}">
+          <td>{{ loop.index }}</td>
+          <td>
+            {% if l.forward_mode == 'named' %}
+              <span class="badge badge-blue">↩️ Có tên</span>
+            {% elif l.forward_mode == 'anonymous' %}
+              <span class="badge badge-gray">👤 Ẩn tên</span>
+            {% else %}
+              <span class="badge badge-purple">🔄 Clone</span>
+            {% endif %}
+          </td>
+          <td><code>{{ l.source_chat_id }}</code></td>
+          <td><code>{{ l.source_msg_id }}</code></td>
+          <td><code>{{ l.dest_chat_id }}</code></td>
+          <td><code>{{ l.dest_msg_id }}</code></td>
+          <td>
+            {% if l.media_token %}
+              <a href="/media/{{ l.media_token }}" target="_blank" class="token-link">{{ l.media_token }}</a>
+            {% else %}–{% endif %}
+          </td>
+          <td>
+            {% if l.status == 'ok' %}
+              <span class="badge badge-active">✅ OK</span>
+            {% else %}
+              <span class="badge badge-danger" title="{{ l.status }}">❌ Lỗi</span>
+            {% endif %}
+          </td>
+          <td class="date">{{ l.created_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">Chưa có bản ghi nào</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterLogs() {
+  const mode = document.getElementById('modeFilter').value;
+  const status = document.getElementById('statusFilter').value;
+  document.querySelectorAll('#logsTable tbody tr').forEach(row => {
+    const m = row.dataset.mode || '';
+    const s = row.dataset.status || '';
+    const mOk = !mode || m === mode;
+    const sOk = !status || s === status;
+    row.style.display = (mOk && sOk) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}
