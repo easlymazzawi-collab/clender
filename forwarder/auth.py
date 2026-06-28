@@ -23,7 +23,7 @@ phone    = os.getenv("TELETHON_PHONE", "")
 # TELETHON_SESSION is just the session *name* (e.g. "session_main").
 # The actual file is always saved inside the forwarder_state/ directory.
 _session_name = os.getenv("TELETHON_SESSION", "session_main")
-STATE_DIR     = os.getenv("FWD_STATE_DIR", "forwarder_state")
+STATE_DIR     = os.path.abspath(os.getenv("FWD_STATE_DIR", "forwarder_state"))
 SESSION_PATH  = os.path.join(STATE_DIR, _session_name)   # full path without .session
 
 

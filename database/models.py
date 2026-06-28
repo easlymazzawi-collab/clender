@@ -123,6 +123,14 @@ def init_db() -> None:
             except Exception:
                 pass
 
+    try:
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_src "
+            "ON topics(source_chat_id, source_topic_id)"
+        )
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -147,18 +155,22 @@ def create_media_link(token, file_id, file_type, file_name=None,
     return dict(row) if row else {}
 
 
-def get_media_link(token: str) -> dict | None:
+def get_media_link(token: str, increment: bool = True) -> dict | None:
     conn = get_conn()
     row = conn.execute(
         "SELECT * FROM media_links WHERE token=? AND is_active=1", (token,)
     ).fetchone()
-    if row:
+    if row and increment:
         conn.execute(
             "UPDATE media_links SET access_count=access_count+1 WHERE token=?", (token,)
         )
         conn.commit()
     conn.close()
     return dict(row) if row else None
+
+
+def peek_media_link(token: str) -> dict | None:
+    return get_media_link(token, increment=False)
 
 
 def list_media_links(limit=50, offset=0) -> list[dict]:
@@ -189,7 +201,11 @@ def upsert_topic(source_chat_id, source_topic_id, dest_chat_id,
                (source_chat_id, source_topic_id, dest_chat_id,
                 dest_topic_id, topic_name)
            VALUES (?,?,?,?,?)
-           ON CONFLICT DO NOTHING""",
+           ON CONFLICT(source_chat_id, source_topic_id) DO UPDATE SET
+                dest_chat_id=excluded.dest_chat_id,
+                dest_topic_id=excluded.dest_topic_id,
+                topic_name=excluded.topic_name,
+                is_active=1""",
         (source_chat_id, source_topic_id, dest_chat_id, dest_topic_id, topic_name)
     )
     conn.commit()
@@ -328,21 +344,7 @@ def create_album_from_file_ids(token: str, file_ids: list, caption: str = "") ->
     return dict(row) if row else {}
 
 
-def get_media_album(token: str) -> dict | None:
-    """Fetch album by token; increments access_count."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM media_albums WHERE token=? AND is_active=1", (token,)
-    ).fetchone()
-    if row:
-        conn.execute(
-            "UPDATE media_albums SET access_count=access_count+1 WHERE token=?",
-            (token,)
-        )
-        conn.commit()
-    conn.close()
-    if not row:
-        return None
+def _album_row_to_dict(row) -> dict:
     d = dict(row)
     d["src_msg_ids"] = _json.loads(d["src_msg_ids"])
     try:
@@ -350,6 +352,108 @@ def get_media_album(token: str) -> dict | None:
     except Exception:
         d["file_ids"] = []
     return d
+
+
+def peek_media_album(token: str) -> dict | None:
+    """Đọc album không tăng access_count."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM media_albums WHERE token=? AND is_active=1", (token,)
+    ).fetchone()
+    conn.close()
+    return _album_row_to_dict(row) if row else None
+
+
+def increment_album_access(token: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE media_albums SET access_count=access_count+1 WHERE token=?", (token,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_media_album(token: str) -> dict | None:
+    """Fetch album by token; increments access_count (legacy API)."""
+    d = peek_media_album(token)
+    if d:
+        increment_album_access(token)
+        d["access_count"] = d.get("access_count", 0) + 1
+    return d
+
+
+def validate_album_access(album: dict) -> tuple[bool, str]:
+    """Kiểm tra hết hạn / max_views (trước khi serve, chưa tăng count)."""
+    import time
+    exp = album.get("expires_at")
+    if exp and time.time() > exp:
+        return False, "expired"
+    mv = album.get("max_views") or 0
+    if mv > 0 and album.get("access_count", 0) >= mv:
+        return False, "max_views"
+    return True, ""
+
+
+def resolve_share_record(token: str) -> dict | None:
+    """Tìm token trong media_albums hoặc media_links (không tăng view)."""
+    album = peek_media_album(token)
+    if album:
+        album["_source"] = "album"
+        return album
+    link = peek_media_link(token)
+    if link:
+        link["_source"] = "link"
+        return link
+    return None
+
+
+def delete_share_token(token: str) -> bool:
+    had = bool(peek_media_album(token) or peek_media_link(token))
+    if peek_media_album(token):
+        delete_media_album(token)
+    if peek_media_link(token):
+        delete_media_link(token)
+    return had
+
+
+def get_share_stats() -> dict:
+    conn = get_conn()
+    albums = conn.execute(
+        "SELECT COUNT(*) FROM media_albums WHERE is_active=1"
+    ).fetchone()[0]
+    links = conn.execute(
+        "SELECT COUNT(*) FROM media_links WHERE is_active=1"
+    ).fetchone()[0]
+    views = conn.execute(
+        "SELECT COALESCE(SUM(access_count),0) FROM media_albums WHERE is_active=1"
+    ).fetchone()[0]
+    views += conn.execute(
+        "SELECT COALESCE(SUM(access_count),0) FROM media_links WHERE is_active=1"
+    ).fetchone()[0]
+    conn.close()
+    return {
+        "total_links": albums + links,
+        "total_albums": albums,
+        "total_legacy_links": links,
+        "total_views": views,
+    }
+
+
+def list_all_share_links(limit: int = 100, offset: int = 0) -> list[dict]:
+    """Gộp album + legacy link cho web admin."""
+    albums = list_media_albums(limit=limit, offset=offset)
+    for a in albums:
+        a["share_type"] = "album"
+        a["file_type"] = "album"
+        a["file_name"] = None
+        a["uploader_name"] = None
+    if len(albums) >= limit:
+        return albums
+    rest = limit - len(albums)
+    links = list_media_links(limit=rest, offset=0)
+    for l in links:
+        l["share_type"] = "link"
+    return albums + links
 
 
 def update_album_settings(token: str, expires_at=None, max_views=None,

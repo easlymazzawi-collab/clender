@@ -41,7 +41,8 @@ from config.settings import (
     TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION, TELETHON_PHONE,
 )
 from database.models import (
-    init_db, get_media_link, list_media_links, delete_media_link,
+    init_db, get_media_link, peek_media_link, list_media_links,
+    delete_share_token, get_share_stats, list_all_share_links,
     list_topics, list_forward_logs, all_settings, set_setting, get_conn,
 )
 from forwarder.state import (
@@ -140,9 +141,10 @@ with app.app_context():
 @app.route("/")
 def dashboard():
     conn = get_conn()
+    share = get_share_stats()
     stats = {
-        "total_links":    conn.execute("SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
-        "total_views":    conn.execute("SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
+        "total_links":    share["total_links"],
+        "total_views":    share["total_views"],
         "total_topics":   conn.execute("SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
         "total_forwards": conn.execute("SELECT COUNT(*) FROM forward_log").fetchone()[0],
     }
@@ -152,7 +154,7 @@ def dashboard():
     except Exception:
         stats["fwd_sessions"] = 0
     conn.close()
-    recent_links  = list_media_links(limit=5)
+    recent_links  = list_all_share_links(limit=5)
     recent_topics = list_topics(limit=5)
     running_sessions = {k: v for k, v in _runner.all_statuses().items()
                         if v.get("status") == "running"}
@@ -203,7 +205,7 @@ text-decoration:none;font-weight:600;font-size:16px}}</style>
 
 @app.route("/media/<token>")
 def serve_media(token: str):
-    record = get_media_link(token)
+    record = get_media_link(token, increment=True) or peek_media_link(token)
     if not record:
         abort(404)
     bot = get_bot()
@@ -235,7 +237,7 @@ def media_info(token: str):
 
 @app.route("/admin/links")
 def page_links():
-    links = list_media_links(limit=100)
+    links = list_all_share_links(limit=100)
     return render_template("links.html", links=links, base_url=BASE_URL)
 
 
@@ -538,13 +540,13 @@ def forwarder_stream(key: str):
 def api_links():
     limit  = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
-    links  = list_media_links(limit=limit, offset=offset)
+    links  = list_all_share_links(limit=limit, offset=offset)
     return jsonify({"ok": True, "data": links, "count": len(links)})
 
 
 @app.route("/api/links/<token>", methods=["DELETE"])
 def api_delete_link(token):
-    delete_media_link(token)
+    delete_share_token(token)
     return jsonify({"ok": True, "token": token})
 
 
@@ -562,9 +564,11 @@ def api_logs():
 @app.route("/api/stats")
 def api_stats():
     conn = get_conn()
+    share = get_share_stats()
     data = {
-        "total_links":    conn.execute("SELECT COUNT(*) FROM media_links WHERE is_active=1").fetchone()[0],
-        "total_views":    conn.execute("SELECT COALESCE(SUM(access_count),0) FROM media_links").fetchone()[0],
+        "total_links":    share["total_links"],
+        "total_views":    share["total_views"],
+        "total_albums":   share["total_albums"],
         "total_topics":   conn.execute("SELECT COUNT(*) FROM topics WHERE is_active=1").fetchone()[0],
         "total_forwards": conn.execute("SELECT COUNT(*) FROM forward_log").fetchone()[0],
         "by_type":        {},
@@ -574,10 +578,12 @@ def api_stats():
     except Exception:
         data["fwd_sessions"] = 0
     rows = conn.execute(
-        "SELECT file_type, COUNT(*) as cnt FROM media_links GROUP BY file_type"
+        "SELECT file_type, COUNT(*) as cnt FROM media_links WHERE is_active=1 GROUP BY file_type"
     ).fetchall()
     conn.close()
     data["by_type"] = {r["file_type"]: r["cnt"] for r in rows}
+    if share["total_albums"]:
+        data["by_type"]["album"] = share["total_albums"]
     return jsonify({"ok": True, "data": data})
 
 

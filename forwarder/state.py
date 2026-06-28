@@ -155,13 +155,29 @@ def _db_upsert_session(data: dict):
         logger.warning(f"_db_upsert_session: {e}")
 
 
+def db_upsert_session_row(key: str, src_name: str, dst_name: str, mode: str,
+                          cfg: dict, status: str = "running", progress: dict | None = None):
+    """Tạo hoặc cập nhật row fwd_sessions (dùng khi session bắt đầu)."""
+    _db_upsert_session({
+        "key": key,
+        "src_name": src_name,
+        "dst_name": dst_name,
+        "mode": mode,
+        "cfg": cfg,
+        "progress": progress or {},
+        "created": time.time(),
+        "last_updated": time.time(),
+    })
+    db_set_session_status(key, status)
+
+
 def db_set_session_status(key: str, status: str):
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             "UPDATE fwd_sessions SET status=?, updated_at=? WHERE key=?",
-            (status, time.time(), key)
+            (status, time.time(), key),
         )
         conn.commit()
         conn.close()
@@ -175,7 +191,7 @@ def db_set_session_progress(key: str, progress: dict):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             "UPDATE fwd_sessions SET progress_json=?, updated_at=? WHERE key=?",
-            (json.dumps(progress, ensure_ascii=False), time.time(), key)
+            (json.dumps(progress, ensure_ascii=False), time.time(), key),
         )
         conn.commit()
         conn.close()

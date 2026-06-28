@@ -372,10 +372,8 @@ async def clone_pinned_messages(client: TelegramClient,
     if not pinned_src_ids:
         return 0
 
-    # Get numeric chat_id for Bot API pinning
-    dst_chat_id = getattr(dst_entity, "id", None)
-    if dst_chat_id and dst_chat_id > 0:
-        dst_chat_id = -dst_chat_id   # channels/supergroups are negative
+    from telethon import utils as tg_utils
+    dst_chat_id = tg_utils.get_peer_id(dst_entity)
 
     pinned = 0
     # Pin in REVERSE order so the "first" pinned message in source
@@ -939,6 +937,7 @@ async def run_session(client: TelegramClient, cfg: dict,
     last_id_buf = 0
     SAVE_EVERY = 50
     stats      = {"normal": 0, "album": 0, "flood_wait": 0, "errors": 0}
+    id_map: dict[int, int] = {}
     pending_album = {"gid": None, "msgs": [], "dst_topic": None}
 
     async def flush_pending():
@@ -1275,9 +1274,9 @@ async def run_relink(client: TelegramClient, cfg: dict,
         patterns.append(_re.compile(
             r'https?://t\.me/' + _re.escape(old_bot) + r'\?start=([A-Za-z0-9_-]+)',
             _re.IGNORECASE))
-    # Bắt mọi t.me/<bất kỳ bot>?start=TOKEN (phòng khi không nhớ tên bot cũ)
-    patterns.append(_re.compile(
-        r'https?://t\.me/[A-Za-z0-9_]+\?start=([A-Za-z0-9_-]+)', _re.IGNORECASE))
+    else:
+        patterns.append(_re.compile(
+            r'https?://t\.me/[A-Za-z0-9_]+\?start=([A-Za-z0-9_-]+)', _re.IGNORECASE))
     # Bắt link web /d/TOKEN cũ (nếu đổi domain)
     patterns.append(_re.compile(r'https?://[^\s]+/d/([A-Za-z0-9_-]+)', _re.IGNORECASE))
 
@@ -1300,6 +1299,10 @@ async def run_relink(client: TelegramClient, cfg: dict,
 
         text = getattr(msg, "message", None)
         if not text:
+            continue
+
+        if not getattr(msg, "out", False):
+            skipped += 1
             continue
 
         # Tìm token trong caption

@@ -67,15 +67,26 @@ python3 run.py --auth
 # Session được lưu vào: forwarder_state/session_main.session
 ```
 
-### 4. Chạy
+### 4. Chạy (Windows / local)
 
 ```bash
-python3 run.py            # Bot + Web server (cùng lúc)
-python3 run.py --web      # Chỉ web server (port 5000)
-python3 run.py --bot      # Chỉ Telegram bot
+python run.py            # Bot + Web (khuyến nghị — deep link hoạt động)
+python run.py --web      # Chỉ web admin (port 5000)
+python run.py --bot      # Chỉ Telegram bot
+python run.py --auth     # Xác thực Telethon (1 lần)
 ```
 
 **Web admin**: http://localhost:5000
+
+### Cập nhật code (giữ data)
+
+Chỉ thay file code (`.py`, `web/`, …). **Giữ nguyên**:
+
+- `.env`
+- `database/` (SQLite)
+- `forwarder_state/` (session Telethon + tiến độ resume clone)
+
+Sau đó: `pip install -r requirements.txt` (nếu dependencies đổi) → chạy lại `python run.py`.
 
 ---
 
@@ -149,20 +160,6 @@ GET    /forwarder/stream/<key>      SSE progress stream
 - Bot phải là **Admin** trong cả forum nguồn và forum đích (cho Bot forward)
 - Telethon account phải là **Admin** hoặc có quyền đọc trong forum nguồn
 - Forum đích phải bật **Topics** (Supergroup với forum mode)
-
----
-
-## 🚀 Deploy Production
-
-```bash
-# Web server
-gunicorn -w 2 -b 0.0.0.0:5000 app:app
-
-# Bot (riêng process)
-python3 run.py --bot
-
-# Hoặc dùng systemd / supervisor để quản lý
-```
 
 ---
 

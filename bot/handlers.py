@@ -19,19 +19,20 @@ from collections import defaultdict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.constants import ChatMemberStatus, ParseMode
+from telegram.constants import ParseMode
 
 from config.settings import (
     ADMIN_IDS, DEST_FORUM_ID, BASE_URL,
-    LINK_CAPTION_TEMPLATE, CLONE_DELAY_SECONDS,
+    LINK_CAPTION_TEMPLATE,
     BOT_USERNAME, MAX_FILE_SIZE_MB,
 )
 from database.models import (
-    create_media_link, list_media_links, delete_media_link,
+    list_media_links,
     upsert_topic, list_topics, list_forward_logs,
     log_forward, get_setting, set_setting, all_settings,
-    get_media_album, list_media_albums, get_conn,
-    create_album_from_file_ids,
+    peek_media_album, increment_album_access, validate_album_access,
+    resolve_share_record, get_media_link, list_media_albums, get_conn,
+    create_album_from_file_ids, delete_share_token,
     record_user, list_user_ids, count_users, mark_user_blocked,
     update_album_settings, get_album_settings,
 )
@@ -232,14 +233,13 @@ async def _create_link(msg, user_id: int, user_name: str) -> str | None:
     fi = extract_file_info(msg)
     if not fi:
         return None
-    from utils.token import generate_token
-    token = generate_token(14)
+    from utils.token import generate_numeric_token
+    token = generate_numeric_token(16)
     cap   = msg.caption or msg.text or ""
-    create_media_link(
-        token=token, file_id=fi["file_id"], file_type=fi["file_type"],
-        file_name=fi.get("file_name"), mime_type=fi.get("mime_type"),
-        thumb_file_id=fi.get("thumb_file_id"), caption=cap,
-        uploader_id=user_id, uploader_name=user_name,
+    create_album_from_file_ids(
+        token,
+        [{"type": fi["file_type"], "file_id": fi["file_id"]}],
+        cap,
     )
     return token
 
@@ -266,24 +266,29 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"⏳ Bạn đang bấm quá nhanh! Vui lòng chờ {wait} giây rồi thử lại."
             )
             return
-        album = get_media_album(token)
+        album = resolve_share_record(token)
         if not album:
             await update.message.reply_text("❌ Link không hợp lệ hoặc đã hết hạn.")
             return
 
-        # Kiểm tra hết hạn
-        exp = album.get("expires_at")
-        if exp and time.time() > exp:
-            await update.message.reply_text("⏱ Link này đã hết hạn.")
-            return
-        # Kiểm tra giới hạn lượt xem (access_count đã được tăng trong get_media_album)
-        mv = album.get("max_views") or 0
-        if mv > 0 and album.get("access_count", 0) > mv:
-            await update.message.reply_text(
-                f"👁 Link đã đạt giới hạn {mv} lượt xem."
-            )
+        if album.get("_source") == "link":
+            link = get_media_link(token)
+            if link:
+                await _serve_legacy_link(update, ctx, link)
             return
 
+        ok_access, reason = validate_album_access(album)
+        if not ok_access:
+            if reason == "expired":
+                await update.message.reply_text("⏱ Link này đã hết hạn.")
+            else:
+                await update.message.reply_text(
+                    f"👁 Link đã đạt giới hạn {album.get('max_views', 0)} lượt xem."
+                )
+            return
+
+        increment_album_access(token)
+        album["access_count"] = album.get("access_count", 0) + 1
         await _serve_album(update, ctx, album)
         return
 
@@ -315,6 +320,32 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
     )
+
+
+async def _serve_legacy_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE, record: dict):
+    """Serve media_links cũ (file_id) — tương thích /share trước đây."""
+    chat_id = update.effective_chat.id
+    ft = record.get("file_type", "document")
+    fid = record.get("file_id")
+    cap = record.get("caption") or ""
+    if not fid:
+        await update.message.reply_text("❌ Link không còn media.")
+        return
+    kw = {"caption": cap[:1024]} if cap else {}
+    try:
+        if ft == "photo":
+            await ctx.bot.send_photo(chat_id=chat_id, photo=fid, **kw)
+        elif ft in ("video", "animation", "video_note"):
+            await ctx.bot.send_video(chat_id=chat_id, video=fid, **kw)
+        elif ft == "audio":
+            await ctx.bot.send_audio(chat_id=chat_id, audio=fid, **kw)
+        elif ft == "voice":
+            await ctx.bot.send_voice(chat_id=chat_id, voice=fid, **kw)
+        else:
+            await ctx.bot.send_document(chat_id=chat_id, document=fid, **kw)
+    except Exception as e:
+        logger.warning(f"_serve_legacy_link: {e}")
+        await update.message.reply_text(f"❌ Không gửi được media: {e}")
 
 
 async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: dict):
@@ -415,6 +446,7 @@ async def _serve_album(update: Update, ctx: ContextTypes.DEFAULT_TYPE, album: di
             chat_id=chat_id,
             from_chat_id=src_chat_id,
             message_ids=src_msg_ids,
+            protect_content=protect,
         )
         if result:
             logger.info(f"serve_album OK via forward_messages ({n} msgs)")
@@ -504,19 +536,17 @@ async def cmd_mylinks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return   # member không có quyền — im lặng
     if not await gate(update, ctx):
         return
-    uid  = update.effective_user.id
     conn = get_conn()
     rows = conn.execute(
-        "SELECT token, file_type, access_count, created_at FROM media_links "
-        "WHERE uploader_id=? AND is_active=1 ORDER BY created_at DESC LIMIT 5",
-        (uid,)
+        "SELECT token, access_count, created_at FROM media_albums "
+        "WHERE is_active=1 ORDER BY created_at DESC LIMIT 5"
     ).fetchall()
     conn.close()
     if not rows:
         await update.message.reply_text("📭 Bạn chưa có link nào.")
         return
     lines = [
-        f"• `{r['token']}` — {r['file_type']} — 👁️{r['access_count']}\n"
+        f"• `{r['token']}` — 📦 album — 👁️{r['access_count']}\n"
         f"  [{build_share_url(r['token'])}]({build_share_url(r['token'])})"
         for r in rows
     ]
@@ -692,8 +722,10 @@ async def cmd_del_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         await update.message.reply_text("Usage: /del_link <token>")
         return
-    delete_media_link(ctx.args[0])
-    await update.message.reply_text(f"✅ Đã xóa `{ctx.args[0]}`", parse_mode=ParseMode.MARKDOWN)
+    if delete_share_token(ctx.args[0]):
+        await update.message.reply_text(f"✅ Đã xóa `{ctx.args[0]}`", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("❌ Không tìm thấy token.")
 
 
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1004,6 +1036,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     user = update.effective_user
 
+    if not await gate(update, ctx):
+        return
+
     # Admin đang broadcast → phát nội dung
     if user.id in _broadcast_pending and is_admin(user.id):
         _broadcast_pending.discard(user.id)
@@ -1075,7 +1110,6 @@ async def _do_broadcast(ctx: ContextTypes.DEFAULT_TYPE, msg, admin):
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
-    await q.answer()
     data = q.data
     user = update.effective_user
 
@@ -1087,26 +1121,31 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("❌ Bạn vẫn chưa tham gia kênh. Hãy join rồi bấm lại.",
                            show_alert=True)
             return
-
-        # Đã join → nếu có token đang chờ, tự gửi media luôn
+        await q.answer("✅ OK")
         token = pop_pending_token(user.id)
         if token:
-            album = get_media_album(token)
-            if album:
-                await q.message.edit_text("✅ Xác nhận thành công! Đang gửi media…")
-                # Tạo "update giả" dùng message hiện tại để serve
-                ok2, wait = _check_serve_rate(user.id)
-                if ok2:
-                    await _serve_album(update, ctx, album)
-                else:
-                    await q.message.reply_text(f"⏳ Chờ {wait}s rồi bấm lại link.")
-                return
+            album = resolve_share_record(token)
+            if album and album.get("_source") == "album":
+                ok_access, reason = validate_album_access(album)
+                if ok_access:
+                    await q.message.edit_text("✅ Xác nhận thành công! Đang gửi media…")
+                    ok2, wait = _check_serve_rate(user.id)
+                    if ok2:
+                        increment_album_access(token)
+                        album["access_count"] = album.get("access_count", 0) + 1
+                        await _serve_album(update, ctx, album)
+                    else:
+                        await q.message.reply_text(f"⏳ Chờ {wait}s rồi bấm lại link.")
+                    return
+                elif reason == "expired":
+                    await q.message.edit_text("⏱ Link này đã hết hạn.")
+                    return
         await q.message.edit_text(
             "✅ Xác nhận thành công! Bấm lại link để xem media."
         )
         return
 
-    # ── Admin panel callbacks ──────────────────────────────────────────────────
+    await q.answer()
     if data.startswith("panel:"):
         if not is_admin(user.id):
             await q.answer("🚫 Không có quyền.", show_alert=True)
@@ -1266,14 +1305,16 @@ async def _handle_panel(q, ctx, action: str):
         return
 
     if action == "links":
-        links = list_media_links(limit=5) + list_media_albums(limit=5)
-        if not links:
+        from database.models import list_all_share_links
+        items = list_all_share_links(limit=8)
+        if not items:
             txt = "📭 Chưa có link nào."
         else:
-            lines = []
-            for l in list_media_albums(limit=8):
-                lines.append(f"• `{l['token']}` — 📦album — 👁️{l.get('access_count',0)}")
-            txt = "🔗 *ALBUM GẦN ĐÂY:*\n\n" + ("\n".join(lines) or "trống")
+            lines = [
+                f"• `{l['token']}` — {l.get('share_type', 'link')} — 👁️{l.get('access_count', 0)}"
+                for l in items
+            ]
+            txt = "🔗 *LINK GẦN ĐÂY:*\n\n" + "\n".join(lines)
         await q.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN,
                                   reply_markup=_panel_back_kb())
         return

@@ -31,7 +31,7 @@
           <td>{{ loop.index }}</td>
           <td>
             <code class="token">{{ l.token }}</code>
-            <button class="btn-copy" title="Copy link" onclick="copyLink('{{ base_url }}/media/{{ l.token }}')">📋</button>
+            <button class="btn-copy" title="Copy link" onclick="copyLink('{{ base_url }}/d/{{ l.token }}')">📋</button>
           </td>
           <td><span class="badge badge-{{ l.file_type }}">{{ l.file_type }}</span></td>
           <td class="filename">{{ l.file_name or '–' }}</td>
@@ -42,7 +42,7 @@
           <td>{{ l.uploader_name or '–' }}</td>
           <td class="date">{{ l.created_at }}</td>
           <td>
-            <a href="{{ base_url }}/media/{{ l.token }}" target="_blank" class="btn btn-xs" title="Mở link">🔗</a>
+            <a href="{{ base_url }}/d/{{ l.token }}" target="_blank" class="btn btn-xs" title="Mở link">🔗</a>
             <a href="{{ base_url }}/media/{{ l.token }}/info" target="_blank" class="btn btn-xs" title="Chi tiết">ℹ️</a>
             <button class="btn btn-xs btn-danger" onclick="deleteLink('{{ l.token }}')" title="Xóa">🗑️</button>
           </td>
