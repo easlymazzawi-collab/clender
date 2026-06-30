@@ -116,14 +116,18 @@ async def _ensure_backup_topic(bot, dest_chat_id: int) -> int | None:
         return None
 
 
-def send_backup_to_telegram(zip_path: str):
+def send_backup_to_telegram(zip_path: str) -> bool:
     """Gửi file backup lên topic 'backup' trong forum đích qua bot."""
     from config.settings import BOT_TOKEN, DEST_FORUM_ID
     if not BOT_TOKEN or not DEST_FORUM_ID:
-        logger.info("backup_to_telegram: thiếu BOT_TOKEN/DEST_FORUM_ID — bỏ qua")
-        return
+        logger.warning(
+            "backup_to_telegram: thiếu BOT_TOKEN/DEST_FORUM_ID — "
+            "đặt BACKUP_TO_TELEGRAM=1 và DEST_FORUM_ID trong .env"
+        )
+        return False
     if not zip_path or not os.path.exists(zip_path):
-        return
+        logger.warning("backup_to_telegram: file zip không tồn tại")
+        return False
 
     async def _send():
         from telegram import Bot
@@ -131,14 +135,18 @@ def send_backup_to_telegram(zip_path: str):
         tid = await _ensure_backup_topic(bot, DEST_FORUM_ID)
         import datetime as _dt
         cap = f"📦 Backup {_dt.datetime.now().strftime('%d/%m/%Y %H:%M')}"
-        with open(zip_path, "rb") as f:
-            await bot.send_document(
-                chat_id=DEST_FORUM_ID,
-                message_thread_id=tid,
-                document=f,
-                filename=os.path.basename(zip_path),
-                caption=cap,
-            )
+        kwargs = {
+            "chat_id": DEST_FORUM_ID,
+            "document": open(zip_path, "rb"),
+            "filename": os.path.basename(zip_path),
+            "caption": cap,
+        }
+        if tid:
+            kwargs["message_thread_id"] = tid
+        try:
+            await bot.send_document(**kwargs)
+        finally:
+            kwargs["document"].close()
 
     try:
         import asyncio
@@ -146,8 +154,10 @@ def send_backup_to_telegram(zip_path: str):
         loop.run_until_complete(_send())
         loop.close()
         logger.info("✅ Đã gửi backup lên topic Telegram")
+        return True
     except Exception as e:
-        logger.warning(f"send_backup_to_telegram: {e}")
+        logger.error(f"send_backup_to_telegram thất bại: {e}")
+        return False
 
 
 def _backup_loop():
@@ -168,15 +178,66 @@ def _backup_loop():
 _scheduler_started = False
 
 
+def get_backup_status() -> dict:
+    """Trạng thái backup — dùng cho /health và debug."""
+    from config.settings import BOT_TOKEN, DEST_FORUM_ID, DB_PATH
+
+    to_tg = os.getenv("BACKUP_TO_TELEGRAM", "0") == "1"
+    files = []
+    if os.path.isdir(BACKUP_DIR):
+        files = sorted(
+            [f for f in os.listdir(BACKUP_DIR) if f.startswith("backup_") and f.endswith(".zip")],
+            reverse=True,
+        )
+    last_file = files[0] if files else None
+    last_mtime = None
+    if last_file:
+        last_mtime = datetime.datetime.fromtimestamp(
+            os.path.getmtime(os.path.join(BACKUP_DIR, last_file))
+        ).isoformat(timespec="seconds")
+
+    reasons = []
+    if not to_tg:
+        reasons.append("BACKUP_TO_TELEGRAM=0 — chỉ lưu file local, không gửi Telegram")
+    if to_tg and not BOT_TOKEN:
+        reasons.append("Thiếu BOT_TOKEN")
+    if to_tg and not DEST_FORUM_ID:
+        reasons.append("Thiếu DEST_FORUM_ID")
+
+    return {
+        "scheduler_on": _scheduler_started,
+        "interval_hours": INTERVAL_H,
+        "keep_days": KEEP_DAYS,
+        "backup_dir": BACKUP_DIR,
+        "telegram_enabled": to_tg,
+        "telegram_ready": to_tg and bool(BOT_TOKEN and DEST_FORUM_ID),
+        "local_file_count": len(files),
+        "last_backup_file": last_file,
+        "last_backup_at": last_mtime,
+        "db_exists": os.path.exists(DB_PATH),
+        "skip_reasons": reasons,
+    }
+
+
 def start_backup_scheduler() -> bool:
     """Khởi động thread backup nền (idempotent — gọi an toàn nhiều lần)."""
     global _scheduler_started
     if _scheduler_started:
         return False
     _scheduler_started = True
+    to_tg = os.getenv("BACKUP_TO_TELEGRAM", "0") == "1"
     t = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
     t.start()
-    logger.info(f"📦 Auto-backup bật: mỗi {INTERVAL_H}h, giữ {KEEP_DAYS} ngày → {BACKUP_DIR}/")
+    if to_tg:
+        logger.info(
+            f"📦 Auto-backup bật: mỗi {INTERVAL_H}h → {BACKUP_DIR}/ "
+            f"+ gửi Telegram (forum {os.getenv('DEST_FORUM_ID', '?')})"
+        )
+    else:
+        logger.info(
+            f"📦 Auto-backup bật: mỗi {INTERVAL_H}h → {BACKUP_DIR}/ "
+            f"(chỉ local — đặt BACKUP_TO_TELEGRAM=1 để gửi lên Telegram)"
+        )
     return True
 
 
@@ -188,13 +249,21 @@ def run_backup_now(send_telegram: bool | None = None) -> dict:
     if send_telegram is None:
         send_telegram = os.getenv("BACKUP_TO_TELEGRAM", "0") == "1"
     if send_telegram and path:
-        send_backup_to_telegram(path)
-        sent = True
-    return {"ok": bool(path), "path": path, "sent_telegram": sent}
+        sent = send_backup_to_telegram(path)
+    return {
+        "ok": bool(path),
+        "path": path,
+        "sent_telegram": sent,
+        "status": get_backup_status(),
+    }
 
 
 if __name__ == "__main__":
-    # Chạy backup thủ công 1 lần: python utils/backup.py
+    # Chạy backup thủ công:
+    #   python utils/backup.py              (theo .env)
+    #   python utils/backup.py --telegram   (bắt buộc gửi Telegram)
+    import sys
     logging.basicConfig(level=logging.INFO)
-    result = run_backup_now()
+    force_tg = "--telegram" in sys.argv
+    result = run_backup_now(send_telegram=True if force_tg else None)
     print(f"Backup: {result}")

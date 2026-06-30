@@ -626,10 +626,12 @@ def api_stats():
     return jsonify({"ok": True, "data": data})
 
 
-@app.route("/api/backup", methods=["POST"])
+@app.route("/api/backup", methods=["GET", "POST"])
 def api_backup_now():
-    """Chạy backup thủ công (DB + state files)."""
-    from utils.backup import run_backup_now
+    """GET: trạng thái backup. POST: chạy backup thủ công."""
+    from utils.backup import run_backup_now, get_backup_status
+    if request.method == "GET":
+        return jsonify({"ok": True, "status": get_backup_status()})
     send_tg = (request.json or {}).get("telegram") if request.is_json else None
     result = run_backup_now(send_telegram=send_tg)
     return jsonify(result), (200 if result["ok"] else 500)
@@ -675,6 +677,7 @@ def health():
     """
     from config.settings import BOT_TOKEN, BOT_USERNAME, TELETHON_API_ID
     from forwarder.state import STATE_DIR
+    from utils.backup import get_backup_status
     import os
 
     bot_token_ok  = bool(BOT_TOKEN)
@@ -687,6 +690,8 @@ def health():
     albums = conn.execute("SELECT COUNT(*) FROM media_albums WHERE is_active=1").fetchone()[0]
     links  = conn.execute("SELECT COUNT(*) FROM media_links  WHERE is_active=1").fetchone()[0]
     conn.close()
+
+    backup = get_backup_status()
 
     return jsonify({
         "status": "ok",
@@ -702,6 +707,7 @@ def health():
             "albums_stored": albums,
             "links_stored":  links,
         },
+        "backup": backup,
         "warnings": [
             w for w in [
                 None if bot_token_ok   else "BOT_TOKEN not set — bot cannot start",
@@ -710,7 +716,7 @@ def health():
                 None if session_ok     else f"Session file missing: run 'python run.py --auth'",
                 None if _telethon_ready else _telethon_error or "Telethon not initialized",
             ] if w
-        ],
+        ] + backup.get("skip_reasons", []),
         "note": (
             "Bot Telegram phải đang CHẠY để xử lý deep link /start TOKEN. "
             "Dùng 'python run.py' (không phải --web) để chạy cả bot lẫn web."
