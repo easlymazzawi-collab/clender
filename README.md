@@ -86,6 +86,18 @@ bash deploy/setup_ubuntu.sh
 journalctl -u forumbot -f
 ```
 
+### Windows VPS (24/7)
+
+```cmd
+REM Cách 1 — chạy tay (có tự restart nếu crash)
+deploy\start_windows.bat
+
+REM Cách 2 — tự chạy khi VPS khởi động (chạy CMD as Administrator)
+deploy\install_windows_task.bat
+```
+
+`python run.py` có **web watchdog** — mỗi 60s kiểm tra `/health`, web chết thì tự bật lại (bot không bị ảnh hưởng).
+
 Mở cổng `WEB_PORT` (mặc định 5000) trên firewall nếu truy cập từ ngoài.
 
 ### Cập nhật code (giữ data)
@@ -107,6 +119,7 @@ Sau đó: `pip install -r requirements.txt` (nếu dependencies đổi) → ch�
 | Bot hoạt động, **web không vào được** | Chạy `python run.py --bot` (chỉ bot) | Dùng `python run.py` (cả bot + web) |
 | Web không phản hồi | Cổng 5000 bị chiếm / firewall chặn | `ss -tlnp \| grep 5000`, mở `WEB_PORT` |
 | **Backup không chạy** | Trước đây backup chỉ bật khi web chạy | Cập nhật code mới — backup chạy với mọi mode |
+| Web chết lại sau vài ngày | Thread web crash, bot vẫn sống | Dùng `deploy\start_windows.bat` hoặc cập nhật code có watchdog |
 | Backup thủ công | — | `python utils/backup.py` hoặc `POST /api/backup` |
 | Kiểm tra nhanh | — | `curl http://127.0.0.1:5000/health` |
 

@@ -5,11 +5,15 @@ QUAN TRỌNG: Cần chạy CẢ HAI thành phần song song:
 
   Cách 1 — 1 lệnh duy nhất (khuyến nghị):
     python run.py
-    → Chạy Bot Telegram + Web server cùng lúc
+    → Chạy Bot Telegram + Web server cùng lúc (+ watchdog tự restart web)
 
   Cách 2 — 2 terminal riêng:
     Terminal 1: python run.py --web   (web admin: localhost:5000)
     Terminal 2: python run.py --bot   (Telegram bot — XỬ LÝ DEEP LINK /start TOKEN)
+
+  Windows 24/7:
+    deploy\\start_windows.bat
+    deploy\\install_windows_task.bat   (tự chạy khi VPS khởi động)
 
   Xác thực Telethon (chạy 1 lần):
     python run.py --auth
@@ -35,6 +39,10 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 _web_error: str | None = None
+_web_thread: threading.Thread | None = None
+_web_lock = threading.Lock()
+_watchdog_stop = threading.Event()
+WATCHDOG_INTERVAL = int(__import__("os").getenv("WEB_WATCHDOG_SEC", "60"))
 
 
 def _start_backup():
@@ -59,10 +67,11 @@ def run_web():
         app.run(host=WEB_HOST, port=WEB_PORT, debug=False, use_reloader=False)
     except OSError as e:
         _web_error = str(e)
-        if "Address already in use" in str(e) or getattr(e, "errno", None) == 98:
+        if "Address already in use" in str(e) or getattr(e, "errno", None) in (48, 98, 10048):
             logger.error(
                 f"❌ Web server KHÔNG khởi động — cổng {WEB_PORT} đã bị chiếm.\n"
-                f"   Kiểm tra: ss -tlnp | grep {WEB_PORT}\n"
+                f"   Windows: netstat -ano | findstr :{WEB_PORT}\n"
+                f"   Linux:   ss -tlnp | grep {WEB_PORT}\n"
                 f"   Hoặc đổi WEB_PORT trong .env"
             )
         else:
@@ -70,29 +79,74 @@ def run_web():
     except Exception as e:
         _web_error = str(e)
         logger.error(f"❌ Web server crash: {e}", exc_info=True)
+    finally:
+        logger.warning("Web server thread đã dừng")
+
+
+def _web_is_healthy() -> bool:
+    from config.settings import WEB_PORT
+    url = f"http://127.0.0.1:{WEB_PORT}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _start_web_thread() -> threading.Thread:
+    """Khởi động (hoặc khởi động lại) web server thread."""
+    global _web_thread, _web_error
+    with _web_lock:
+        _web_error = None
+        t = threading.Thread(target=run_web, daemon=True, name="web-server")
+        t.start()
+        _web_thread = t
+        return t
 
 
 def _wait_for_web(timeout: float = 15.0) -> bool:
     """Chờ web server sẵn sàng sau khi start thread."""
     from config.settings import WEB_PORT
-    url = f"http://127.0.0.1:{WEB_PORT}/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _web_error:
             return False
-        try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
-                if resp.status == 200:
-                    logger.info("✅ Web server đã sẵn sàng")
-                    return True
-        except Exception:
-            pass
+        if _web_is_healthy():
+            logger.info("✅ Web server đã sẵn sàng")
+            return True
         time.sleep(0.5)
     logger.error(
         f"❌ Web server không phản hồi sau {timeout}s — "
         f"kiểm tra WEB_PORT={WEB_PORT} và firewall"
     )
     return False
+
+
+def _web_watchdog():
+    """
+    Kiểm tra /health mỗi WEB_WATCHDOG_SEC giây.
+    Nếu web chết im lặng (thread dừng hoặc không phản hồi) → tự restart.
+    Bot vẫn chạy bình thường trong main thread.
+    """
+    logger.info(f"🔄 Web watchdog bật — kiểm tra mỗi {WATCHDOG_INTERVAL}s")
+    while not _watchdog_stop.wait(WATCHDOG_INTERVAL):
+        healthy = _web_is_healthy()
+        alive = _web_thread is not None and _web_thread.is_alive()
+        if healthy and alive:
+            continue
+        if not alive:
+            logger.warning("⚠️ Web thread đã chết — tự khởi động lại…")
+        else:
+            logger.warning("⚠️ Web không phản hồi /health — tự khởi động lại…")
+        _start_web_thread()
+        if not _wait_for_web():
+            logger.error("❌ Watchdog restart web thất bại — thử lại sau vòng tiếp theo")
+
+
+def _start_web_watchdog():
+    t = threading.Thread(target=_web_watchdog, daemon=True, name="web-watchdog")
+    t.start()
+    return t
 
 
 def run_bot():
@@ -132,15 +186,16 @@ def main():
         run_bot()
         return
 
-    # Default: both (web in background thread, bot in foreground)
+    # Default: web + watchdog in background, bot in foreground
     logger.info("Khởi động cả Bot + Web server…")
-    web_thread = threading.Thread(target=run_web, daemon=True, name="web-server")
-    web_thread.start()
+    _start_web_thread()
     if not _wait_for_web():
         logger.warning(
             "⚠️  Bot vẫn chạy nhưng WEB KHÔNG hoạt động — "
             "forwarder dashboard và /api/* sẽ không truy cập được."
         )
+    if "--no-watchdog" not in args:
+        _start_web_watchdog()
     run_bot()   # Bot runs in main thread (blocks until Ctrl+C)
 
 
