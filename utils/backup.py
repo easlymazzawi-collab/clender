@@ -165,16 +165,36 @@ def _backup_loop():
         time.sleep(INTERVAL_H * 3600)
 
 
-def start_backup_scheduler():
-    """Khởi động thread backup nền (gọi 1 lần khi app start)."""
+_scheduler_started = False
+
+
+def start_backup_scheduler() -> bool:
+    """Khởi động thread backup nền (idempotent — gọi an toàn nhiều lần)."""
+    global _scheduler_started
+    if _scheduler_started:
+        return False
+    _scheduler_started = True
     t = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
     t.start()
     logger.info(f"📦 Auto-backup bật: mỗi {INTERVAL_H}h, giữ {KEEP_DAYS} ngày → {BACKUP_DIR}/")
+    return True
+
+
+def run_backup_now(send_telegram: bool | None = None) -> dict:
+    """Chạy backup ngay (thủ công hoặc qua API)."""
+    path = create_backup()
+    rotate_backups()
+    sent = False
+    if send_telegram is None:
+        send_telegram = os.getenv("BACKUP_TO_TELEGRAM", "0") == "1"
+    if send_telegram and path:
+        send_backup_to_telegram(path)
+        sent = True
+    return {"ok": bool(path), "path": path, "sent_telegram": sent}
 
 
 if __name__ == "__main__":
     # Chạy backup thủ công 1 lần: python utils/backup.py
     logging.basicConfig(level=logging.INFO)
-    path = create_backup()
-    rotate_backups()
-    print(f"Backup: {path}")
+    result = run_backup_now()
+    print(f"Backup: {result}")

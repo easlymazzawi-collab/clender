@@ -78,6 +78,16 @@ python run.py --auth     # Xác thực Telethon (1 lần)
 
 **Web admin**: http://localhost:5000
 
+### VPS Ubuntu (24/7)
+
+```bash
+bash deploy/setup_ubuntu.sh
+# Service chạy: python run.py (bot + web + backup)
+journalctl -u forumbot -f
+```
+
+Mở cổng `WEB_PORT` (mặc định 5000) trên firewall nếu truy cập từ ngoài.
+
 ### Cập nhật code (giữ data)
 
 Chỉ thay file code (`.py`, `web/`, …). **Giữ nguyên**:
@@ -87,6 +97,20 @@ Chỉ thay file code (`.py`, `web/`, …). **Giữ nguyên**:
 - `forwarder_state/` (session Telethon + tiến độ resume clone)
 
 Sau đó: `pip install -r requirements.txt` (nếu dependencies đổi) → chạy lại `python run.py`.
+
+---
+
+## 🔧 Xử lý sự cố
+
+| Triệu chứng | Nguyên nhân thường gặp | Cách xử lý |
+|-------------|------------------------|------------|
+| Bot hoạt động, **web không vào được** | Chạy `python run.py --bot` (chỉ bot) | Dùng `python run.py` (cả bot + web) |
+| Web không phản hồi | Cổng 5000 bị chiếm / firewall chặn | `ss -tlnp \| grep 5000`, mở `WEB_PORT` |
+| **Backup không chạy** | Trước đây backup chỉ bật khi web chạy | Cập nhật code mới — backup chạy với mọi mode |
+| Backup thủ công | — | `python utils/backup.py` hoặc `POST /api/backup` |
+| Kiểm tra nhanh | — | `curl http://127.0.0.1:5000/health` |
+
+**Lưu ý:** `python run.py --bot` chỉ chạy Telegram bot — web admin và forwarder dashboard **sẽ tắt**. Dùng `python run.py` để chạy đầy đủ.
 
 ---
 

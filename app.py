@@ -126,12 +126,6 @@ with app.app_context():
     init_db()
     sync_file_sessions_to_db()
     _init_telethon()
-    # Auto-backup hàng ngày (chạy nền)
-    try:
-        from utils.backup import start_backup_scheduler
-        start_backup_scheduler()
-    except Exception as _e:
-        logger.warning(f"backup scheduler: {_e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -630,6 +624,15 @@ def api_stats():
     if share["total_albums"]:
         data["by_type"]["album"] = share["total_albums"]
     return jsonify({"ok": True, "data": data})
+
+
+@app.route("/api/backup", methods=["POST"])
+def api_backup_now():
+    """Chạy backup thủ công (DB + state files)."""
+    from utils.backup import run_backup_now
+    send_tg = (request.json or {}).get("telegram") if request.is_json else None
+    result = run_backup_now(send_telegram=send_tg)
+    return jsonify(result), (200 if result["ok"] else 500)
 
 
 @app.route("/api/settings", methods=["POST"])
